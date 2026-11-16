@@ -1,4 +1,20 @@
 from contextlib import asynccontextmanager
+import logging
+import sys
+import os
+
+# Import torch early to prevent DLL initialization conflicts with FastAPI
+# This must be imported before FastAPI app initialization
+try:
+    import torch
+    logger = logging.getLogger(__name__)
+    logger.info(f"PyTorch {torch.__version__} imported successfully during app startup")
+except ImportError:
+    logger = logging.getLogger(__name__)
+    logger.warning("PyTorch not available - semantic matching will use fallback")
+except Exception as e:
+    logger = logging.getLogger(__name__)
+    logger.error(f"Failed to import PyTorch: {e}")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

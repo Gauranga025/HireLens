@@ -1,4 +1,4 @@
-from typing import Optional, List
+from typing import Optional, List, Dict
 from uuid import UUID
 
 from sqlalchemy import Float, ForeignKey, Index, String, Text, UniqueConstraint
@@ -30,6 +30,13 @@ class ScreeningResult(Base, UUIDMixin, TimestampMixin):
     additional_skills: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list)
     explanation: Mapped[str] = mapped_column(Text, nullable=False)
     screening_status: Mapped[str] = mapped_column(String(50), nullable=False, default="completed")
+    
+    # New evidence and scoring fields
+    skill_evidence: Mapped[Dict] = mapped_column(JSONB, nullable=True, default=None)
+    requirement_matches: Mapped[List[Dict]] = mapped_column(JSONB, nullable=True, default=None)
+    required_skill_coverage: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    preferred_skill_coverage: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    scoring_strategy: Mapped[Dict] = mapped_column(JSONB, nullable=True, default=None)
     
     job: Mapped["Job"] = relationship("Job", back_populates="screening_results")
     resume: Mapped["Resume"] = relationship("Resume", back_populates="screening_results")

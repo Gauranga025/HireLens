@@ -66,6 +66,21 @@ def extract_required_experience(text: str) -> str:
     return "Not specified"
 
 
+def detect_alternative_skills(line: str, skills: List[str]) -> List[str]:
+    """
+    Detect if a line contains alternative skills (e.g., "Python, Java, or JavaScript").
+    Returns the list of alternative skills found, or empty list if not an alternative pattern.
+    """
+    if " or " in line.lower() or "/" in line:
+        found_skills = []
+        for skill in skills:
+            if skill.lower() in line.lower():
+                found_skills.append(skill)
+        if len(found_skills) >= 2:
+            return found_skills
+    return []
+
+
 def extract_qualifications(text: str) -> List[str]:
     if not text or not isinstance(text, str):
         return []
@@ -145,21 +160,30 @@ def analyze_job_description(text: str) -> Dict[str, Any]:
     required_skills: List[str] = []
     preferred_skills: List[str] = []
 
-    lines = [line.strip().lower() for line in text.splitlines() if line.strip()]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     current_section = None
 
     for line in lines:
-        if any(kw in line for kw in required_keywords):
+        line_lower = line.lower()
+        
+        # Check for alternative skills pattern
+        alternatives = detect_alternative_skills(line, technical_skills)
+        if alternatives and current_section == "required":
+            # Add alternatives as a group - candidate needs at least one
+            required_skills.extend(alternatives)
+            continue
+        
+        if any(kw in line_lower for kw in required_keywords):
             current_section = "required"
-        elif any(kw in line for kw in preferred_keywords):
+        elif any(kw in line_lower for kw in preferred_keywords):
             current_section = "preferred"
         elif current_section == "required":
             for skill in technical_skills:
-                if skill.lower() in line and skill not in required_skills:
+                if skill.lower() in line_lower and skill not in required_skills:
                     required_skills.append(skill)
         elif current_section == "preferred":
             for skill in technical_skills:
-                if skill.lower() in line and skill not in preferred_skills:
+                if skill.lower() in line_lower and skill not in preferred_skills:
                     preferred_skills.append(skill)
 
     if not required_skills and not preferred_skills:

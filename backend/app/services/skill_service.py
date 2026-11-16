@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.utils.text_processor import normalize_skill_name, normalize_text
+from app.data.skill_hierarchy import get_skill_hierarchy_registry
 
 _SKILLS_DB_PATH = Path(__file__).parent.parent / "data" / "skills.json"
 
@@ -73,7 +74,7 @@ def extract_skills(text: str) -> Dict[str, List[str]]:
 
 
 def match_skills_to_requirements(
-    candidate_skills: List[str], required_skills: List[str]
+    candidate_skills: List[str], required_skills: List[str], use_hierarchy: bool = True
 ) -> Dict[str, Any]:
     if not candidate_skills:
         candidate_skills = []
@@ -86,16 +87,71 @@ def match_skills_to_requirements(
     matched: List[str] = []
     missing: List[str] = []
     additional: List[str] = []
+    
+    # Track matched required skills to prevent duplicates
+    matched_required_indices = set()
 
+    # Get skill hierarchy registry if enabled
+    hierarchy = get_skill_hierarchy_registry() if use_hierarchy else None
+
+    # Group alternative skills (skills separated by " or " or "/" in original JD)
+    # This is a simple heuristic - if consecutive skills in required_skills list
+    # appear to be alternatives, treat them as a group
+    alternative_groups: List[List[str]] = []
+    current_group: List[str] = []
+    
     for i, req_skill in enumerate(required_skills):
         if i < len(normalized_required):
             norm_req = normalized_required[i]
-            if norm_req in normalized_candidate:
-                matched.append(req_skill)
+            # Check if this skill might be part of an alternative group
+            # by looking at the original skill name for "or" or "/"
+            if " or " in req_skill.lower() or "/" in req_skill:
+                current_group.append(req_skill)
             else:
-                missing.append(req_skill)
-        else:
-            missing.append(req_skill)
+                if current_group:
+                    alternative_groups.append(current_group)
+                    current_group = []
+                
+                # Check for exact match first
+                if norm_req in normalized_candidate:
+                    matched.append(req_skill)
+                    matched_required_indices.add(i)
+                # Check for hierarchy matches if enabled (only full credit)
+                elif hierarchy and i not in matched_required_indices:
+                    for cand_skill in candidate_skills:
+                        credit = hierarchy.get_match_credit(req_skill, cand_skill)
+                        if credit >= 1.0:  # Only full credit (aliases/equivalents)
+                            matched.append(req_skill)
+                            matched_required_indices.add(i)
+                            break
+                    if i not in matched_required_indices:
+                        missing.append(req_skill)
+                else:
+                    missing.append(req_skill)
+    
+    # Handle any remaining group
+    if current_group:
+        alternative_groups.append(current_group)
+    
+    # Process alternative groups - candidate needs at least one from each group
+    for group in alternative_groups:
+        group_matched = False
+        for skill in group:
+            norm_skill = normalize_skill_name(skill)
+            if norm_skill in normalized_candidate:
+                matched.append(skill)
+                group_matched = True
+                break
+            # Check hierarchy for alternatives
+            elif hierarchy:
+                for cand_skill in candidate_skills:
+                    credit = hierarchy.get_match_credit(skill, cand_skill)
+                    if credit > 0:
+                        matched.append(skill)
+                        group_matched = True
+                        break
+        if not group_matched:
+            missing.extend(group)
 
     for i, cand_skill in enumerate(candidate_skills):
         if i < len(normalized_candidate):

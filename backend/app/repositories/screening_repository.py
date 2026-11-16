@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,6 +24,11 @@ class ScreeningRepository:
         additional_skills: List[str],
         explanation: str,
         screening_status: str = "completed",
+        skill_evidence: Optional[Dict] = None,
+        requirement_matches: Optional[List[Dict]] = None,
+        required_skill_coverage: float = 0.0,
+        preferred_skill_coverage: float = 0.0,
+        scoring_strategy: Optional[Dict] = None,
     ) -> ScreeningResult:
         """Create a new screening result record.
         
@@ -40,6 +45,11 @@ class ScreeningRepository:
             additional_skills: List of additional skills in resume.
             explanation: Match explanation text.
             screening_status: Screening status.
+            skill_evidence: Skill evidence dictionary.
+            requirement_matches: Requirement match results.
+            required_skill_coverage: Required skill coverage percentage.
+            preferred_skill_coverage: Preferred skill coverage percentage.
+            scoring_strategy: Scoring strategy metadata.
         
         Returns:
             Created ScreeningResult instance.
@@ -56,11 +66,20 @@ class ScreeningRepository:
             additional_skills=additional_skills,
             explanation=explanation,
             screening_status=screening_status,
+            skill_evidence=skill_evidence,
+            requirement_matches=requirement_matches,
+            required_skill_coverage=required_skill_coverage,
+            preferred_skill_coverage=preferred_skill_coverage,
+            scoring_strategy=scoring_strategy,
         )
         
-        db.add(screening)
-        await db.flush()
-        await db.refresh(screening)
+        try:
+            db.add(screening)
+            await db.flush()
+            await db.refresh(screening)
+        except Exception as e:
+            await db.rollback()
+            raise
         
         return screening
     

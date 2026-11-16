@@ -29,10 +29,12 @@ async def upload_resumes(
 ) -> BatchResumeUploadResponse:
     """
     Upload and process multiple resume files (PDF or DOCX).
-    
+
     Each file is processed independently. Invalid files do not stop processing of valid files.
     Returns extraction results, candidate information, and extracted skills.
     """
+    logger.info("=== UPLOAD ENDPOINT INVOKED ===")
+    
     results: List[ResumeUploadResponse] = []
     successful = 0
     failed = 0
@@ -79,11 +81,16 @@ async def upload_resumes(
                 storage_key=storage_key,
                 processing_status="completed",
             )
+            logger.info(f"[DIAGNOSTIC] Resume created in DB, ID before commit: {resume.id}, type: {type(resume.id)}")
             await db.commit()
+            logger.info(f"[DIAGNOSTIC] Resume ID after commit: {resume.id}")
+
+            resume_id_str = str(resume.id)
+            logger.info(f"[DIAGNOSTIC] Resume ID as string for response: {resume_id_str}")
 
             results.append(
                 ResumeUploadResponse(
-                    resume_id=str(resume.id),
+                    resume_id=resume_id_str,
                     filename=file.filename,
                     status="success",
                     message="Resume processed successfully",
@@ -92,6 +99,7 @@ async def upload_resumes(
                     error=None,
                 )
             )
+            logger.info(f"[DIAGNOSTIC] Appended result with resume_id: {resume_id_str}")
             successful += 1
 
         except UnsupportedFileTypeError as e:

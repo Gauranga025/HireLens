@@ -76,11 +76,11 @@ class ResumeRepository:
     
     async def get_by_ids(self, db: AsyncSession, resume_ids: List[UUID]) -> List[Resume]:
         """Retrieve multiple resumes by IDs.
-        
+
         Args:
             db: Database session.
             resume_ids: List of resume UUIDs.
-        
+
         Returns:
             List of Resume instances.
         """

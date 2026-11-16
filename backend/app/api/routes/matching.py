@@ -3,6 +3,7 @@ from uuid import UUID
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
@@ -11,7 +12,8 @@ from app.repositories.resume_repository import ResumeRepository
 from app.repositories.screening_repository import ScreeningRepository
 from app.schemas.api import CandidateMatchResult, MatchingRequest, MatchingResponse
 from app.schemas.matching import MatchResult
-from app.services.matching_service import compute_match
+from app.services.scoring_service import ScoringService
+from app.utils.serialization import serialize_for_jsonb
 
 router = APIRouter(prefix="/matching", tags=["matching"])
 logger = logging.getLogger(__name__)
@@ -24,11 +26,14 @@ async def evaluate_matching(
 ) -> MatchingResponse:
     """
     Evaluate resume-job matching for multiple candidates against a job.
-    
+
     Retrieves the job description and resumes from their repositories,
     computes match scores using TF-IDF, semantic similarity, and skill matching,
     and returns results sorted by overall match score descending.
     """
+    logger.info("=== MATCHING ENDPOINT INVOKED ===")
+    
+    # Parse job UUID
     try:
         job_uuid = UUID(request.job_id)
     except ValueError:
@@ -48,9 +53,11 @@ async def evaluate_matching(
     job_analysis = job.analysis_data
     job_text = job_analysis.get("raw_text", "")
     job_skills = job_analysis.get("required_skills", [])
+    preferred_skills = job_analysis.get("preferred_skills", [])
 
     resume_repo = ResumeRepository()
     screening_repo = ScreeningRepository()
+    scoring_service = ScoringService()
 
     resume_uuids: List[UUID] = []
     for resume_id in request.resume_ids:
@@ -62,16 +69,18 @@ async def evaluate_matching(
     resumes = await resume_repo.get_by_ids(db, resume_uuids)
     resume_map = {str(r.id): r for r in resumes}
 
+    logger.info(f"[DIAGNOSTIC] Repository get_by_ids returned {len(resumes)} resumes out of {len(request.resume_ids)} requested")
+
     results: list[CandidateMatchResult] = []
     successful = 0
     failed = 0
 
     for resume_id in request.resume_ids:
         try:
-            resume_uuid = UUID(resume_id)
-            resume = resume_map.get(resume_id)
-            
+            resume = resume_map.get(resume_id)  # resume_id is string, map keys are strings
+
             if not resume:
+                logger.warning(f"Resume {resume_id} not found in repository")
                 failed += 1
                 results.append(
                     CandidateMatchResult(
@@ -99,11 +108,12 @@ async def evaluate_matching(
             resume_text = resume.extracted_text
             resume_skills = resume.skills
 
-            match_dict = compute_match(
+            match_dict = scoring_service.compute_match(
                 resume_text=resume_text,
                 job_text=job_text,
                 resume_skills=resume_skills,
-                job_skills=job_skills,
+                required_skills=job_skills,
+                preferred_skills=preferred_skills,
                 use_semantic=request.use_semantic,
             )
             match_result = MatchResult(**match_dict)
@@ -111,7 +121,7 @@ async def evaluate_matching(
             await screening_repo.create(
                 db=db,
                 job_id=job_uuid,
-                resume_id=resume_uuid,
+                resume_id=resume.id,
                 overall_score=match_result.overall_score,
                 tfidf_score=match_result.tfidf_score,
                 semantic_score=match_result.semantic_score,
@@ -121,7 +131,13 @@ async def evaluate_matching(
                 additional_skills=match_result.additional_skills,
                 explanation=match_result.explanation,
                 screening_status="completed",
+                skill_evidence=serialize_for_jsonb(match_result.skill_evidence),
+                requirement_matches=serialize_for_jsonb(match_result.requirement_matches),
+                required_skill_coverage=match_result.required_skill_coverage,
+                preferred_skill_coverage=match_result.preferred_skill_coverage,
+                scoring_strategy=serialize_for_jsonb(match_result.scoring_strategy),
             )
+            await db.commit()
 
             results.append(
                 CandidateMatchResult(
@@ -135,8 +151,8 @@ async def evaluate_matching(
             successful += 1
 
         except Exception as e:
+            logger.exception(f"Matching failed for resume {resume_id}")
             failed += 1
-            logger.error(f"Matching failed for resume {resume_id}: {e}")
             results.append(
                 CandidateMatchResult(
                     resume_id=resume_id,
@@ -155,8 +171,6 @@ async def evaluate_matching(
                     error="Matching process failed",
                 )
             )
-
-    await db.commit()
 
     results.sort(key=lambda x: x.match_result.overall_score, reverse=True)
 

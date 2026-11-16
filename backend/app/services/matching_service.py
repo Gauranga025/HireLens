@@ -6,13 +6,6 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-try:
-    from sentence_transformers import SentenceTransformer
-    HAS_SEMANTIC = True
-except (ImportError, OSError):
-    SentenceTransformer = None
-    HAS_SEMANTIC = False
-
 from app.services.skill_service import match_skills_to_requirements
 from app.utils.text_processor import preprocess_for_embedding, preprocess_for_tfidf
 
@@ -40,10 +33,7 @@ def tfidf_similarity(text1: str, text2: str) -> float:
 
 @functools.lru_cache(maxsize=4)
 def get_sentence_transformer_model(model_name: str = "all-MiniLM-L6-v2") -> object:
-    if SentenceTransformer is None:
-        raise ImportError(
-            "The 'sentence-transformers' package is required for semantic matching."
-        )
+    from sentence_transformers import SentenceTransformer
     return SentenceTransformer(model_name)
 
 

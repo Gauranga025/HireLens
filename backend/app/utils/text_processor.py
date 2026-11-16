@@ -1,6 +1,6 @@
 import re
 import unicodedata
-from typing import FrozenSet, List
+from typing import FrozenSet, List, Dict
 
 ENGLISH_STOPWORDS: FrozenSet[str] = frozenset(
     {
@@ -310,8 +310,104 @@ def preprocess_for_embedding(text: str) -> str:
     return clean_text(normalized)
 
 
+# Skill alias mappings for normalization
+_SKILL_ALIASES: Dict[str, str] = {
+    "js": "javascript",
+    "node": "node.js",
+    "nodejs": "node.js",
+    "postgre": "postgresql",
+    "postgres": "postgresql",
+    "mongo": "mongodb",
+    "mysql": "mysql",
+    "redis": "redis",
+    "oop": "object-oriented programming",
+    "rest": "rest api",
+    "restful": "rest api",
+    "graphql": "graphql",
+    "ts": "typescript",
+    "py": "python",
+    "golang": "go",
+    "cs": "c#",
+    "cpp": "c++",
+    ".net": ".net",
+    "asp": "asp.net",
+    "ml": "machine learning",
+    "dl": "deep learning",
+    "nlp": "natural language processing",
+    "cv": "computer vision",
+    "ai": "artificial intelligence",
+    "ci/cd": "cicd",
+    "devops": "devops",
+    "aws": "aws",
+    "azure": "azure",
+    "gcp": "gcp",
+    "k8s": "kubernetes",
+    "k8": "kubernetes",
+    "tf": "tensorflow",
+    "torch": "pytorch",
+    "sklearn": "scikit-learn",
+    "pandas": "pandas",
+    "numpy": "numpy",
+    "reactjs": "react",
+    "angularjs": "angular",
+    "vuejs": "vue.js",
+    "express": "express.js",
+    "nest": "nestjs",
+    "next": "next.js",
+    "nuxt": "nuxt.js",
+    "docker": "docker",
+    "k8": "kubernetes",
+    "tf": "terraform",
+    "tdd": "test-driven development",
+    "bdd": "behavior-driven development",
+    "agile": "agile",
+    "scrum": "scrum",
+    "kanban": "kanban",
+    "git": "git",
+    "github": "github",
+    "gitlab": "gitlab",
+    "jira": "jira",
+    "linux": "linux",
+    "unix": "unix",
+    "sql": "sql",
+    "nosql": "nosql",
+    "html": "html",
+    "css": "css",
+    "sass": "sass",
+    "scss": "sass",
+    "less": "less",
+    "webpack": "webpack",
+    "vite": "vite",
+    "npm": "npm",
+    "yarn": "yarn",
+    "pnpm": "pnpm",
+    
+    # REST API variations
+    "rest apis": "rest api",
+    "restful api": "rest api",
+    "restful services": "rest api",
+    "rest api development": "rest api",
+    
+    # Object-Oriented Programming variations
+    "object oriented programming": "object-oriented programming",
+    "object-oriented design": "object-oriented programming",
+    "object-oriented principles": "object-oriented programming",
+    
+    # SQL variations
+    "structured query language": "sql",
+    "sql querying": "sql",
+    "sql queries": "sql",
+    
+    # PostgreSQL variations
+    "postgresql database": "postgresql",
+    "postgresql databases": "postgresql",
+}
+
 def normalize_skill_name(skill: str) -> str:
     if not skill or not isinstance(skill, str):
         return ""
 
-    return re.sub(r"\s+", " ", skill.strip().lower())
+    normalized = re.sub(r"\s+", " ", skill.strip().lower())
+    
+    # Apply alias mapping
+    return _SKILL_ALIASES.get(normalized, normalized)
