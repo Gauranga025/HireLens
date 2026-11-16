@@ -74,7 +74,7 @@ def extract_skills(text: str) -> Dict[str, List[str]]:
 
 
 def match_skills_to_requirements(
-    candidate_skills: List[str], required_skills: List[str], use_hierarchy: bool = True
+    candidate_skills: List[str], required_skills: List[str], use_hierarchy: bool = True, related_skill_credit_threshold: float = 1.0
 ) -> Dict[str, Any]:
     if not candidate_skills:
         candidate_skills = []
@@ -116,11 +116,11 @@ def match_skills_to_requirements(
                 if norm_req in normalized_candidate:
                     matched.append(req_skill)
                     matched_required_indices.add(i)
-                # Check for hierarchy matches if enabled (only full credit)
+                # Check for hierarchy matches if enabled (respect credit threshold)
                 elif hierarchy and i not in matched_required_indices:
                     for cand_skill in candidate_skills:
                         credit = hierarchy.get_match_credit(req_skill, cand_skill)
-                        if credit >= 1.0:  # Only full credit (aliases/equivalents)
+                        if credit >= related_skill_credit_threshold:  # Use configurable threshold
                             matched.append(req_skill)
                             matched_required_indices.add(i)
                             break
@@ -142,11 +142,11 @@ def match_skills_to_requirements(
                 matched.append(skill)
                 group_matched = True
                 break
-            # Check hierarchy for alternatives
+            # Check hierarchy for alternatives (respect credit threshold)
             elif hierarchy:
                 for cand_skill in candidate_skills:
                     credit = hierarchy.get_match_credit(skill, cand_skill)
-                    if credit > 0:
+                    if credit >= related_skill_credit_threshold:
                         matched.append(skill)
                         group_matched = True
                         break

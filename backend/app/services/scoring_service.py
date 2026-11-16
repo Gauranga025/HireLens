@@ -29,12 +29,14 @@ class ScoringConfig:
     use_keyword_stuffing_penalty: bool = False  # Enable keyword stuffing penalty (disabled by default)
     keyword_stuffing_threshold: float = 0.7  # Threshold for keyword stuffing detection
     keyword_stuffing_penalty_weight: float = 0.15  # Max penalty for keyword stuffing (15%)
+    keyword_stuffing_education_aware: bool = False  # Consider education evidence as valid (helps fresh graduates)
+    related_skill_credit_threshold: float = 1.0  # Minimum credit for hierarchy match (1.0 = full credit only, 0.5 = allow partial credit)
 
 
 class ScoringService:
     """Service for evidence-aware candidate scoring."""
     
-    ALGORITHM_VERSION = "2.1.0-evidence-integrated"
+    ALGORITHM_VERSION = "2.1.1-fairness-improved"
     
     def __init__(
         self,
@@ -52,7 +54,8 @@ class ScoringService:
         self.semantic_service = semantic_service or SemanticMatchingService()
         self.evidence_service = EvidenceExtractionService()
         self.keyword_stuffing_detector = KeywordStuffingDetector(
-            threshold=self.config.keyword_stuffing_threshold
+            threshold=self.config.keyword_stuffing_threshold,
+            education_aware=self.config.keyword_stuffing_education_aware,
         )
     
     def compute_match(
@@ -86,10 +89,14 @@ class ScoringService:
         
         # Match skills to requirements (with hierarchy if enabled)
         required_match = match_skills_to_requirements(
-            resume_skills, required_skills, use_hierarchy=self.config.use_skill_hierarchy
+            resume_skills, required_skills, 
+            use_hierarchy=self.config.use_skill_hierarchy,
+            related_skill_credit_threshold=self.config.related_skill_credit_threshold,
         )
         preferred_match = match_skills_to_requirements(
-            resume_skills, preferred_skills, use_hierarchy=self.config.use_skill_hierarchy
+            resume_skills, preferred_skills, 
+            use_hierarchy=self.config.use_skill_hierarchy,
+            related_skill_credit_threshold=self.config.related_skill_credit_threshold,
         )
         
         # Calculate skill coverage scores
@@ -173,6 +180,8 @@ class ScoringService:
             "skill_hierarchy_enabled": self.config.use_skill_hierarchy,
             "demonstration_levels_enabled": self.config.use_demonstration_levels,
             "keyword_stuffing_penalty_enabled": self.config.use_keyword_stuffing_penalty,
+            "keyword_stuffing_education_aware": self.config.keyword_stuffing_education_aware,
+            "related_skill_credit_threshold": self.config.related_skill_credit_threshold,
         }
         
         # Add active components

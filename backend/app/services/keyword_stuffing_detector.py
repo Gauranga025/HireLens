@@ -22,17 +22,24 @@ class KeywordStuffingDetector:
     
     Keyword stuffing is defined as listing many skills without
     demonstrated experience (evidence in experience/projects sections).
+    
+    When education_aware is enabled, skills demonstrated through education,
+    coursework, academic projects, and internships are also considered valid evidence.
     """
     
-    def __init__(self, threshold: float = 0.7):
+    def __init__(self, threshold: float = 0.7, education_aware: bool = False):
         """
         Initialize the detector.
         
         Args:
             threshold: Ratio threshold for considering stuffing (default 0.7).
                        If 70% or more of skills have no evidence, it's considered stuffing.
+            education_aware: Whether to consider education evidence as valid (default False).
+                           When enabled, skills in education/certifications are not counted
+                           as unsupported. This helps avoid penalizing fresh graduates.
         """
         self.threshold = threshold
+        self.education_aware = education_aware
     
     def analyze(
         self,
@@ -64,14 +71,24 @@ class KeywordStuffingDetector:
         for skill in skills:
             evidence = skill_evidence.get(skill, [])
             
-            # Check if skill has any evidence from experience or projects
+            # Check if skill has any evidence
             has_demonstrated_evidence = False
             for ev in evidence:
                 ev_type = ev.evidence_type.value if hasattr(ev.evidence_type, 'value') else str(ev.evidence_type)
+                
+                # Always count experience, project, and internship as valid evidence
                 if ev_type in [
                     "demonstrated_in_experience",
                     "demonstrated_in_project",
                     "demonstrated_in_internship",
+                ]:
+                    has_demonstrated_evidence = True
+                    break
+                
+                # If education_aware is enabled, also count education and certifications
+                if self.education_aware and ev_type in [
+                    "mentioned_in_education",
+                    "mentioned_in_certification",
                 ]:
                     has_demonstrated_evidence = True
                     break

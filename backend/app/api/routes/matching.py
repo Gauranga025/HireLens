@@ -12,7 +12,7 @@ from app.repositories.resume_repository import ResumeRepository
 from app.repositories.screening_repository import ScreeningRepository
 from app.schemas.api import CandidateMatchResult, MatchingRequest, MatchingResponse
 from app.schemas.matching import MatchResult
-from app.services.scoring_service import ScoringService
+from app.services.scoring_service import ScoringService, ScoringConfig
 from app.utils.serialization import serialize_for_jsonb
 
 router = APIRouter(prefix="/matching", tags=["matching"])
@@ -57,7 +57,12 @@ async def evaluate_matching(
 
     resume_repo = ResumeRepository()
     screening_repo = ScreeningRepository()
-    scoring_service = ScoringService()
+    scoring_service = ScoringService(
+        config=ScoringConfig(
+            keyword_stuffing_education_aware=True,
+            related_skill_credit_threshold=0.5,
+        )
+    )
 
     resume_uuids: List[UUID] = []
     for resume_id in request.resume_ids:
