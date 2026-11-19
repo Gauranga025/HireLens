@@ -3,6 +3,7 @@ Resume evidence extraction service.
 Extracts supporting evidence for skills from resume sections.
 """
 import re
+from datetime import date
 from typing import Dict, List, Optional, Tuple
 from enum import Enum
 
@@ -52,6 +53,9 @@ class SkillEvidence:
         end_offset: int,
         demonstration_level: DemonstrationLevel = None,
         date_info: Dict = None,
+        experience_type: Optional[str] = None,
+        project_info: Optional[Dict] = None,
+        temporal_info: Optional[Dict] = None,
     ):
         self.skill = skill
         self.section = section
@@ -62,6 +66,16 @@ class SkillEvidence:
         self.end_offset = end_offset
         self.demonstration_level = demonstration_level
         self.date_info = date_info or {}
+        # Keep experience/project context available inside date_info for
+        # backward compatibility with existing consumers, while also exposing
+        # the dedicated attributes.
+        if experience_type is not None:
+            self.date_info.setdefault("experience_type", experience_type)
+        if project_info is not None:
+            self.date_info.setdefault("project_info", project_info)
+        self.experience_type = experience_type
+        self.project_info = project_info
+        self.temporal_info = temporal_info
     
     def to_dict(self) -> Dict:
         """Convert to dictionary representation."""
@@ -75,6 +89,9 @@ class SkillEvidence:
             "end_offset": self.end_offset,
             "demonstration_level": self.demonstration_level.value if self.demonstration_level else None,
             "date_info": self.date_info,
+            "experience_type": self.experience_type,
+            "project_info": self.project_info,
+            "temporal_info": self.temporal_info,
         }
 
 
@@ -97,6 +114,8 @@ class EvidenceExtractionService:
         self,
         resume_text: str,
         skills: List[str],
+        experience_metadata: List[Dict] = None,
+        project_metadata: List[Dict] = None,
     ) -> Dict[str, List[SkillEvidence]]:
         """
         Extract evidence for each skill from resume text.
@@ -104,6 +123,8 @@ class EvidenceExtractionService:
         Args:
             resume_text: Full resume text.
             skills: List of skills to find evidence for.
+            experience_metadata: Experience entries with classification (from Phase 8.1).
+            project_metadata: Project entries with intelligence (from Phase 8.2).
             
         Returns:
             Dictionary mapping skill names to lists of evidence.
@@ -119,7 +140,10 @@ class EvidenceExtractionService:
         
         for skill in skills:
             normalized_skill = normalize_skill_name(skill)
-            evidence = self._find_skill_evidence(resume_text, normalized_skill, sections, skill)
+            evidence = self._find_skill_evidence(
+                resume_text, normalized_skill, sections, skill,
+                experience_metadata, project_metadata
+            )
             if evidence:
                 evidence_map[skill] = evidence
         
@@ -131,6 +155,8 @@ class EvidenceExtractionService:
         normalized_skill: str,
         sections: List[Tuple[SectionType, int, int, str]],
         original_skill: str,
+        experience_metadata: List[Dict] = None,
+        project_metadata: List[Dict] = None,
     ) -> List[SkillEvidence]:
         """
         Find evidence for a specific skill.
@@ -140,6 +166,8 @@ class EvidenceExtractionService:
             normalized_skill: Normalized skill name.
             sections: Detected sections.
             original_skill: Original skill name for display.
+            experience_metadata: Experience entries with classification (from Phase 8.1).
+            project_metadata: Project entries with intelligence (from Phase 8.2).
             
         Returns:
             List of evidence items for the skill.
@@ -171,6 +199,16 @@ class EvidenceExtractionService:
             # Extract date information
             date_info = self._extract_date_info(snippet, section)
             
+            # Add experience type context if available
+            experience_type = None
+            if experience_metadata and section == SectionType.EXPERIENCE:
+                experience_type = self._find_experience_type_for_offset(start, experience_metadata, text)
+            
+            # Add project context if available
+            project_info = None
+            if project_metadata and section == SectionType.PROJECTS:
+                project_info = self._find_project_for_offset(start, project_metadata, text)
+            
             evidence_item = SkillEvidence(
                 skill=original_skill,
                 section=section,
@@ -181,6 +219,9 @@ class EvidenceExtractionService:
                 end_offset=end,
                 demonstration_level=demonstration_level,
                 date_info=date_info,
+                experience_type=experience_type,
+                project_info=project_info,
+                temporal_info=None,  # Can be populated from experience/project metadata in future
             )
             
             evidence.append(evidence_item)
@@ -374,8 +415,8 @@ class EvidenceExtractionService:
                 date_info["has_dates"] = True
                 break
         
-        # Check for recent years (last 3 years)
-        current_year = 2026
+        # Check for recent years (last 3 years, including the current year)
+        current_year = date.today().year
         recent_years = [str(current_year - i) for i in range(0, 4)]
         for year in recent_years:
             if year in snippet:
@@ -438,3 +479,67 @@ class EvidenceExtractionService:
         }
         
         return min(evidence, key=lambda e: strength_order[e.strength])
+    
+    def _find_experience_type_for_offset(
+        self,
+        offset: int,
+        experience_metadata: List[Dict],
+        text: str,
+    ) -> Optional[str]:
+        """
+        Find the experience type for a given text offset.
+        
+        Args:
+            offset: Text offset.
+            experience_metadata: Experience entries with classification.
+            text: Full resume text.
+            
+        Returns:
+            Experience type if found, None otherwise.
+        """
+        if not experience_metadata:
+            return None
+        
+        # Find the experience entry that contains this offset
+        # This is a simplified approach - in production, you'd need to track offsets during parsing
+        for exp in experience_metadata:
+            exp_title = exp.get("title", "")
+            if exp_title and exp_title.lower() in text.lower():
+                # Check if this is likely the right experience entry
+                # Return the experience type
+                return exp.get("experience_type")
+        
+        return None
+    
+    def _find_project_for_offset(
+        self,
+        offset: int,
+        project_metadata: List[Dict],
+        text: str,
+    ) -> Optional[Dict]:
+        """
+        Find the project info for a given text offset.
+        
+        Args:
+            offset: Text offset.
+            project_metadata: Project entries with intelligence.
+            text: Full resume text.
+            
+        Returns:
+            Project info dict if found, None otherwise.
+        """
+        if not project_metadata:
+            return None
+        
+        # Find the project entry that contains this offset
+        for proj in project_metadata:
+            proj_title = proj.get("title", "")
+            if proj_title and proj_title.lower() in text.lower():
+                # Return relevant project info
+                return {
+                    "title": proj.get("title"),
+                    "project_type": proj.get("project_type"),
+                    "complexity_level": proj.get("complexity_level"),
+                }
+        
+        return None

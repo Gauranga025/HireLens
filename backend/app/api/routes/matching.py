@@ -1,18 +1,22 @@
 import logging
+from dataclasses import asdict
 from uuid import UUID
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.repositories.job_repository import JobRepository
+from app.repositories.job_repository import JobRepository, get_structured_requirements
 from app.repositories.resume_repository import ResumeRepository
 from app.repositories.screening_repository import ScreeningRepository
 from app.schemas.api import CandidateMatchResult, MatchingRequest, MatchingResponse
 from app.schemas.matching import MatchResult
-from app.services.scoring_service import ScoringService, ScoringConfig
+from app.services.candidate_evaluation_service import (
+    CandidateEvaluationContext,
+    CandidateEvaluationService,
+)
+from app.services.scoring_service import ScoringConfig
 from app.utils.serialization import serialize_for_jsonb
 
 router = APIRouter(prefix="/matching", tags=["matching"])
@@ -50,22 +54,27 @@ async def evaluate_matching(
             detail=f"Job with ID '{request.job_id}' not found",
         )
 
-    job_analysis = job.analysis_data
-    job_text = job_analysis.get("raw_text", "")
-    job_skills = job_analysis.get("required_skills", [])
-    preferred_skills = job_analysis.get("preferred_skills", [])
+    job_analysis = job.analysis_data or {}
+    structured_requirements = get_structured_requirements(job)
+    job_text = job.description or job_analysis.get("raw_text", "")
+    job_skills = job.required_skills or job_analysis.get("required_skills", [])
+    preferred_skills = job.preferred_skills or job_analysis.get("preferred_skills", [])
 
     resume_repo = ResumeRepository()
     screening_repo = ScreeningRepository()
-    scoring_service = ScoringService(
-        config=ScoringConfig(
+    evaluation_service = CandidateEvaluationService(
+        scoring_config=ScoringConfig(
             keyword_stuffing_education_aware=True,
             related_skill_credit_threshold=0.5,
         )
     )
 
+    # Deduplicate IDs while preserving request order so the same resume cannot
+    # be evaluated and persisted twice in one request.
+    requested_resume_ids = list(dict.fromkeys(request.resume_ids))
+
     resume_uuids: List[UUID] = []
-    for resume_id in request.resume_ids:
+    for resume_id in requested_resume_ids:
         try:
             resume_uuids.append(UUID(resume_id))
         except ValueError:
@@ -74,13 +83,17 @@ async def evaluate_matching(
     resumes = await resume_repo.get_by_ids(db, resume_uuids)
     resume_map = {str(r.id): r for r in resumes}
 
-    logger.info(f"[DIAGNOSTIC] Repository get_by_ids returned {len(resumes)} resumes out of {len(request.resume_ids)} requested")
+    logger.debug(
+        "Loaded %s resumes for %s requested IDs",
+        len(resumes),
+        len(requested_resume_ids),
+    )
 
     results: list[CandidateMatchResult] = []
     successful = 0
     failed = 0
 
-    for resume_id in request.resume_ids:
+    for resume_id in requested_resume_ids:
         try:
             resume = resume_map.get(resume_id)  # resume_id is string, map keys are strings
 
@@ -113,17 +126,25 @@ async def evaluate_matching(
             resume_text = resume.extracted_text
             resume_skills = resume.skills
 
-            match_dict = scoring_service.compute_match(
+            # Extract experience and project metadata for evidence context
+            experience_metadata = candidate_info.get("experience", [])
+            project_metadata = candidate_info.get("projects", [])
+
+            context = CandidateEvaluationContext(
                 resume_text=resume_text,
                 job_text=job_text,
                 resume_skills=resume_skills,
                 required_skills=job_skills,
                 preferred_skills=preferred_skills,
                 use_semantic=request.use_semantic,
+                experience_metadata=experience_metadata,
+                project_metadata=project_metadata,
+                structured_requirements=structured_requirements,
             )
-            match_result = MatchResult(**match_dict)
+            evaluation = evaluation_service.evaluate_candidate(context)
+            match_result = MatchResult(**asdict(evaluation))
 
-            await screening_repo.create(
+            await screening_repo.upsert(
                 db=db,
                 job_id=job_uuid,
                 resume_id=resume.id,
@@ -157,6 +178,7 @@ async def evaluate_matching(
 
         except Exception as e:
             logger.exception(f"Matching failed for resume {resume_id}")
+            await db.rollback()
             failed += 1
             results.append(
                 CandidateMatchResult(
@@ -181,7 +203,7 @@ async def evaluate_matching(
 
     return MatchingResponse(
         job_id=request.job_id,
-        total_candidates=len(request.resume_ids),
+        total_candidates=len(requested_resume_ids),
         successful=successful,
         failed=failed,
         results=results,

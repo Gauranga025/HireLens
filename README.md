@@ -1,264 +1,540 @@
-# 🎯 AI-Powered Resume Parser & Job Matching System
+# HireLens — AI Resume Screening and Job Matching
 
-[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Framework](https://img.shields.io/badge/framework-Streamlit%201.38.0-red.svg)](https://streamlit.io/)
-[![Deep Learning](https://img.shields.io/badge/embeddings-sentence--transformers%203.1.1-yellow.svg)](https://www.sbert.net/)
-[![Machine Learning](https://img.shields.io/badge/ML-scikit--learn%201.5.2-orange.svg)](https://scikit-learn.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-pytest%208.3.3-brightgreen.svg)](https://pytest.org/)
+HireLens is a full-stack resume screening application that parses PDF and DOCX resumes, analyzes job descriptions into structured requirements, scores candidates with an evidence-aware hybrid scorer, and returns ranked results with explanations and JSON/CSV reports.
 
-An enterprise-grade, privacy-first NLP system that parses unstructured resume documents (PDF and DOCX) and accurately matches candidate qualifications against job descriptions. The system leverages an in-memory streaming extraction engine combined with a hybrid scoring pipeline that synthesizes TF-IDF lexical frequency, deep Sentence Transformer semantic embeddings (`all-MiniLM-L6-v2`), and exact skill taxonomy coverage. Built with high-throughput heuristics and modular Python components, it provides recruiters and candidates with immediate, explainable fit assessments via an interactive Streamlit web dashboard.
+> **Release status:** deployment-prepared for controlled/internal use. The application is **not hardened for untrusted multi-user production**: it has no authentication, uses development credentials in local examples, and has not undergone a formal security, privacy, or fairness audit. Ranking accuracy has **not** been validated on a genuine human-labelled held-out dataset. Scores are decision-support signals, not hiring decisions.
 
 ---
 
-## 📋 Table of Contents
+## Table of contents
 
-- [Overview](#-overview)
-- [Key Features](#-key-features)
-- [System Architecture](#-system-architecture)
-- [Tech Stack](#-tech-stack)
-- [Quick Start](#-quick-start)
-- [Project Structure](#-project-structure)
-- [Usage Guide](#-usage-guide)
-- [Running Tests](#-running-tests)
-- [Configuration](#-configuration)
-- [Privacy & Ethics](#-privacy--ethics)
-- [Limitations](#-limitations)
-- [License](#-license)
-- [Contributors](#-contributors)
-
----
-
-## 🌟 Overview
-
-The **AI-Powered Resume Parser & Job Matching System** automates the labor-intensive recruitment screening process by transforming unstructured resumes into structured analytical data profiles. Operating entirely locally in-memory without transmitting sensitive candidate information to third-party cloud APIs, the system extracts critical identifiers including candidate names, contact details, education histories, work experience, certifications, and technical proficiencies. Extracted candidate attributes are evaluated against job requirements using a weighted three-pillar match algorithm: lexical term frequency (TF-IDF), dense contextual semantics (Sentence Transformers), and deterministic domain taxonomy alignment. The resulting analytics provide recruiter-facing dashboards with granular match scores, identified skill gaps, candidate strengths, and structured export capabilities.
-
----
-
-## ✨ Features
-
-- **Multi-Format In-Memory Document Ingestion**:
-  - High-performance PDF parsing using [PyMuPDF (fitz)](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/resume_extractor.py#L15-L75) with scanned document heuristic detection.
-  - Comprehensive DOCX parsing with table-structure preservation using [python-docx](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/resume_extractor.py#L77-L159).
-  - Pure in-memory streaming pipeline without disk persistence of uploaded files for guaranteed privacy.
-  - Rigorous file validation checking MIME integrity, extension whitelist (`.pdf`, `.docx`), and configurable file size limits (default 10 MB) via [`validate_file`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/resume_extractor.py#L202-L245).
-
-- **Robust Text Preprocessing Pipeline**:
-  - Unicode normalization (NFKD decomposition) and whitespace collapsing via [`normalize_text`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/text_preprocessor.py#L236-L255).
-  - Punctuation cleaning preserving emails, phone numbers, and programming symbols (`C++`, `.NET`, `C#`) via [`clean_text`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/text_preprocessor.py#L257-L280).
-  - Abbreviation-aware sentence segmentation safeguarding honorifics, degrees, and corporate prefixes via [`segment_sentences`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/text_preprocessor.py#L282-L327).
-  - Independent token pipelines specialized for TF-IDF vectorization ([`preprocess_for_tfidf`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/text_preprocessor.py#L375-L400)) and semantic dense embeddings ([`preprocess_for_embedding`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/text_preprocessor.py#L402-L424)).
-
-- **Intelligent Information Extraction**:
-  - Accurate candidate name extraction through structural header heuristics avoiding noise tokens via [`extract_name`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/information_extractor.py#L434-L502).
-  - International and domestic phone number detection across US, Indian, and international standards via [`extract_phone`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/information_extractor.py#L404-L432).
-  - RFC 5322-compliant email parsing via [`extract_email`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/information_extractor.py#L380-L402).
-  - Structured education extraction capturing degree qualifications, educational institutions, and graduation graduation year ranges via [`extract_education`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/information_extractor.py#L504-L625).
-  - Work history extraction identifying job titles, employer organizations, and duration tenures via [`extract_experience`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/information_extractor.py#L627-L744).
-  - Industry certifications and project cataloging via [`extract_certifications`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/information_extractor.py#L746-L800) and [`extract_projects`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/information_extractor.py#L802-L847).
-
-- **Dynamic Skill Taxonomy & Matching**:
-  - Over 200+ pre-configured technical and soft skills cataloged in [skills.json](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/data/skills.json) loaded via [`load_skills_database`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/skill_extractor.py#L56-L113).
-  - Boundary-aware regex compiler handling technical tokens (e.g., `C++`, `C#`, `.NET`, `Go`, `Node.js`) without false positive substrings via [`_compile_skill_pattern`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/skill_extractor.py#L115-L147).
-  - Deterministic skill-to-requirement comparison classifying skills into `matched`, `missing`, and `additional` sets via [`match_skills_to_requirements`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/skill_extractor.py#L200-L264).
-
-- **Three-Pillar Hybrid Matching Engine**:
-  - **TF-IDF Lexical Cosine Similarity** (30% weight) via [`tfidf_similarity`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/resume_matcher.py#L39-L66).
-  - **Sentence Transformer Semantic Similarity** (40% weight) utilizing `all-MiniLM-L6-v2` via [`semantic_similarity`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/resume_matcher.py#L92-L125).
-  - **Skill Requirement Coverage** (30% weight) measuring exact match percentage.
-  - Automatic fault-tolerant fallback (50% TF-IDF + 50% Skill Match) when deep learning dependencies or accelerators are unavailable.
-  - Transparent human-readable analytical explanations generated via [`compute_match`](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/resume_matcher.py#L127-L248).
-
-- **Interactive User Interface & Reporting**:
-  - Responsive web dashboard built with Streamlit and Plotly charts.
-  - Real-time gauge meters and breakdown visualizations.
-  - Downloadable candidate evaluation reports.
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Technology stack](#technology-stack)
+- [Repository structure](#repository-structure)
+- [Prerequisites](#prerequisites)
+- [Local setup](#local-setup)
+- [Environment variables](#environment-variables)
+- [Model download and cache](#model-download-and-cache)
+- [Running the application](#running-the-application)
+- [Testing](#testing)
+- [Production build and deployment](#production-build-and-deployment)
+- [Database and persistence](#database-and-persistence)
+- [API](#api)
+- [Scoring and structured requirements](#scoring-and-structured-requirements)
+- [Known limitations](#known-limitations)
+- [GitHub handoff](#github-handoff)
+- [Documentation](#documentation)
 
 ---
 
-## 🛠 Tech Stack
+## Overview
 
-| Technology | Purpose | Version |
-| :--- | :--- | :--- |
-| **Python** | Primary programming language | `3.11+` |
-| **Streamlit** | Interactive web application framework & user dashboard | `1.38.0` |
-| **PyMuPDF (fitz)** | High-speed, memory-efficient PDF text and metadata extraction | `1.24.10` |
-| **python-docx** | Microsoft Word (.docx) document parsing and table reading | `1.1.2` |
-| **NLTK** | Natural Language Processing tokenization and linguistic stopword corpora | `3.9.1` |
-| **spaCy** | Advanced linguistic preprocessing and entity token structures | `3.7.6` |
-| **Sentence-Transformers** | Dense semantic embedding generation (`all-MiniLM-L6-v2`) | `3.1.1` |
-| **scikit-learn** | Machine learning utilities, TF-IDF vectorization, cosine similarity | `1.5.2` |
-| **pandas** | Tabular data processing and candidate report generation | `2.2.3` |
-| **NumPy** | High-performance numerical and tensor operations | `1.26.4` |
-| **PyTorch (torch)** | Deep learning CPU/GPU compute backend for transformer models | `2.4.1` |
-| **Plotly** | Interactive visualization (radar charts, gauge meters, skill bars) | `5.24.1` |
-| **chardet** | Character encoding detection for raw document streams | `5.2.0` |
-| **pytest** | Automated test suite and test execution framework | `8.3.3` |
+The active application consists of:
+
+- **Frontend:** Next.js 16, React 19, TypeScript, Tailwind CSS 4.
+- **Backend:** FastAPI, SQLAlchemy 2.0 async, Pydantic 2, Alembic.
+- **Database:** PostgreSQL 16.
+- **NLP:** Sentence Transformers (`all-MiniLM-L6-v2`, pinned revision), scikit-learn, PyMuPDF, python-docx.
+- **Evaluation infrastructure:** benchmark tooling is present but its real-data evaluation is blocked because no genuine human-labelled dataset exists.
+
+The legacy Streamlit prototype (`app.py`, `src/`, root `tests/`, and root `requirements*.txt`) is retained as history and is not used by the active application.
 
 ---
 
-## 🚀 Quick Start
+## Features
 
-### Prerequisites
-- Python 3.11 or higher installed on your operating system.
-- Git version control.
+### Job description analysis
 
-### Installation
+- Extracts a role title, required/preferred skills, qualifications, and experience text.
+- Produces structured requirements for individual skills, `ANY`/`ALL` alternative groups, experience constraints, and fundamental engineering skills.
+- Persists flat skills and structured requirements in PostgreSQL.
+- Falls back to `analysis_data` for legacy jobs that lack the dedicated structured-requirements column.
 
-```bash
-# Clone the repository
-git clone <repo-url>
-cd resume-parser-project
+### Resume processing
 
-# Create virtual environment
-python -m venv venv
-venv\Scripts\activate  # Windows
-source venv/bin/activate  # Linux/Mac
+- Accepts PDF and DOCX uploads up to 10 MB per file.
+- Extracts text, candidate details, education, experience, certifications, projects, and skills.
+- Adds experience classification, project intelligence, and temporal metadata.
+- Stores uploaded files locally and parsed data in PostgreSQL.
+- Reports per-file failures without dropping successfully uploaded files.
 
-# Install dependencies
-pip install -r requirements.txt
+### Evidence-aware evaluation
 
-# Download NLTK data (if needed)
-python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
+- Ranks candidates by an overall score from 0 to 100.
+- Reports required/preferred coverage, semantic similarity, evidence strength, and per-requirement evaluation.
+- Links matched skills to section-aware evidence and demonstration levels.
+- Handles satisfied `ANY` groups without double counting or false gaps.
+- Deduplicates repeated resume IDs and upserts screening rows for repeated evaluations.
 
-# Run the application
-streamlit run app.py
+### Reports and UI
+
+- Generates JSON and CSV reports through the same evaluation pipeline as the matching endpoint.
+- Displays score breakdown, evidence, strengths, gaps, requirement groups, and explanations.
+- Shows failed uploads and failed candidates.
+- Polls backend connection status every 30 seconds.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["Next.js UI<br/>frontend/"] --> API["FastAPI API<br/>backend/app"]
+    API --> DB[("PostgreSQL 16<br/>jobs, resumes,<br/>screening_results")]
+    API --> FS[("Upload directory<br/>UPLOAD_STORAGE_DIR")]
+    API --> NLP["Parsing and scoring services<br/>evidence, requirements, scoring"]
+    NLP --> MODEL["Sentence Transformers<br/>all-MiniLM-L6-v2 (pinned)"]
 ```
 
-Upon launching, navigate to `http://localhost:8501` in your web browser to access the dashboard.
+Request flow:
+
+1. `POST /api/v1/jobs/analyze` parses and persists a job description.
+2. `POST /api/v1/resumes/upload` validates, stores, parses, and persists each resume.
+3. `POST /api/v1/matching/evaluate` evaluates all requested candidates, upserts screening rows, and returns results sorted by score.
+4. `POST /api/v1/reports/generate` recomputes one candidate with the same pipeline and returns JSON or CSV content.
+
+The frontend and backend are separate deployment units. FastAPI is not served by Next.js.
 
 ---
 
-## 📁 Project Structure
+## Technology stack
+
+| Component | Technology | Verified version |
+|---|---|---|
+| Backend API | FastAPI | 0.141.1 in verification environment (`>=0.104.0` declared) |
+| Backend server | Uvicorn | 0.52.1 (`>=0.24.0` declared) |
+| Validation | Pydantic / pydantic-settings | 2.x |
+| Database | PostgreSQL | 16 |
+| ORM / driver | SQLAlchemy async / asyncpg | 2.x / 0.29.0 |
+| Migrations | Alembic | 1.13.1 |
+| PDF extraction | PyMuPDF | 1.24.10 |
+| DOCX extraction | python-docx | 1.2.0 installed; 1.1.2 declared |
+| Semantic embeddings | sentence-transformers | 3.1.1 |
+| Transformers runtime | transformers | 4.39.3 installed; 4.57.6 declared |
+| ML utilities | scikit-learn / NumPy | 1.7.2 / 1.26.4 installed; 1.3.2 / 1.24.4 declared |
+| Frontend | Next.js / React | 16.4.6 / 19.3.0 |
+| Language | TypeScript | 5.9.3 |
+| Styling | Tailwind CSS | 4.3.3 |
+| Python runtime | CPython | 3.10.11 |
+| Node runtime | Node.js / npm | 22.18.0 / 10.9.8 |
+
+The installed and declared versions above differ for a few ML packages because verification used the established local Python 3.10 environment. No dependency files were changed during final preparation.
+
+---
+
+## Repository structure
 
 ```text
-dazzling-hypatia/
-├── .gitignore                      # Git ignored files and directories
-├── README.md                       # Comprehensive project documentation
-├── requirements.txt                # Pinned production dependencies
-├── app.py                          # Streamlit web application entrypoint
-├── data/
-│   └── skills.json                 # Standardized technical & soft skill taxonomy
-├── docs/
-│   ├── architecture.md             # System architecture & interface specifications
-│   ├── user_manual.md              # End-user operation & troubleshooting manual
-│   └── testing_report.md           # Test methodology, test matrix & verification
-├── src/
-│   ├── __init__.py                 # Core package initializer
-│   ├── resume_extractor.py         # PDF and DOCX text & metadata extractors
-│   ├── text_preprocessor.py        # Text cleaning, normalization & segmentation
-│   ├── information_extractor.py    # Regex & heuristic entity extraction engine
-│   ├── skill_extractor.py          # Taxonomy loading, regex compiler & skill matcher
-│   └── resume_matcher.py           # TF-IDF, Semantic embeddings & hybrid score engine
-└── tests/
-    ├── __init__.py                 # Test package initializer
-    ├── conftest.py                 # Pytest shared fixtures & test setup
-    ├── test_resume_extractor.py    # Tests for document ingestion & validation
-    ├── test_information_extractor.py # Tests for entity & section extraction
-    └── test_resume_matcher.py      # Tests for similarity & scoring algorithms
+intern/
+├── backend/
+│   ├── app/
+│   │   ├── api/routes/             jobs, resumes, matching, reports
+│   │   ├── core/                   settings, exceptions, in-memory report store
+│   │   ├── db/                     async engine, sessions, declarative base
+│   │   ├── evaluation/             benchmark framework
+│   │   ├── models/                 Job, Resume, ScreeningResult
+│   │   ├── repositories/           PostgreSQL data access
+│   │   ├── schemas/                API and domain schemas
+│   │   ├── services/               parsing, analysis, evidence, semantic, scoring
+│   │   └── utils/                  text processing and JSONB serialization
+│   ├── alembic/versions/           database migrations
+│   ├── scripts/                    benchmark/evaluation CLIs
+│   ├── tests/                      backend pytest suite
+│   ├── evaluation/                 benchmark annotation template
+│   └── requirements.txt
+├── frontend/
+│   ├── app/                        Next.js App Router page
+│   ├── components/                 workflow and result components
+│   ├── lib/                        API client and TypeScript types
+│   └── package.json / package-lock.json
+├── src/                            legacy Streamlit prototype modules
+├── tests/                          legacy prototype tests
+├── sample_data/                    sample artifacts
+├── storage/                        local upload root (ignored)
+├── docker-compose.yml              PostgreSQL 16 service only
+├── .env.example                    backend/frontend environment template
+└── DEPLOYMENT.md                   manual deployment instructions
 ```
 
 ---
 
-## 📖 Usage Guide
+## Prerequisites
 
-1. **Upload Resume**:
-   - In the Streamlit application sidebar or main panel, click **"Browse files"** or drag and drop a candidate resume (`.pdf` or `.docx`).
-   - The file validation layer validates extension integrity and confirms file size is within the allowed limit (10 MB).
-2. **Review Extracted Information**:
-   - Inspect parsed candidate demographics (Name, Email, Phone).
-   - Review structured sections: Education qualifications, Professional Experience history, Certifications, and Projects.
-   - View extracted Technical and Soft skills detected against the taxonomy.
-3. **Provide Job Description**:
-   - Paste the target job posting or role description into the designated text area.
-   - The system automatically extracts required competencies from the job description.
-4. **Execute Match Analysis**:
-   - Click **"Analyze Match"** to trigger the hybrid calculation engine.
-   - Review the aggregate **Overall Match Score** (0–100%) and individual component weights (TF-IDF Lexical, Sentence Transformer Semantic, and Skill Coverage).
-   - Check the **Skill Gap Analysis** to see Confirmed Skills, Missing Requirements, and Additional Candidate Strengths.
-5. **Export Evaluation Report**:
-   - Generate and download a formatted report (PDF / Markdown / JSON) containing complete parsed details and match evaluations for hiring panels.
+- Docker with Docker Compose for local PostgreSQL.
+- Python 3.10 (verified 3.10.11). Use `py -3.10` where multiple Python versions are installed.
+- Node.js 20.9+ and npm (verified 22.18.0 / 10.9.8).
+- Internet access on first semantic-model use, unless the Hugging Face cache is pre-populated.
+- A persistent directory for uploaded files in any non-local deployment.
 
 ---
 
-## 🧪 Running Tests
+## Local setup
 
-The test suite validates document parsing, text preprocessing, heuristic information extraction, skill compilation, and hybrid matching algorithms.
+### 1. Start PostgreSQL
 
-```bash
-# Run all tests with verbose output
-pytest tests/ -v
+From the repository root:
 
-# Run tests with execution timing summary
-pytest tests/ -v --durations=10
-
-# Run a specific test module
-pytest tests/test_information_extractor.py -v
-
-# Run with test coverage report (if pytest-cov installed)
-pytest --cov=src tests/ --cov-report=term-missing
+```powershell
+docker compose up -d postgres
+docker compose ps
 ```
 
+PostgreSQL is exposed on `localhost:5432` with a named volume `postgres_data`.
+
+> Do not run `docker compose down -v` unless you intentionally want to delete the local database volume.
+
+### 2. Create the Python environment
+
+From the repository root:
+
+```powershell
+py -3.10 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
+
+On Linux/macOS use `python3.10 -m venv .venv` and `source .venv/bin/activate`.
+
+### 3. Configure environment files
+
+```powershell
+Copy-Item .env.example backend\.env
+Copy-Item frontend\.env.example frontend\.env.local
+```
+
+- The backend reads `backend/.env` when started from `backend/`.
+- The frontend reads `frontend/.env.local` at build/dev time.
+- Neither real `.env` file should be committed.
+- `DATABASE_URL` is computed from `POSTGRES_*`; there is no application `DATABASE_URL` setting.
+- Add every deployed frontend origin to `CORS_ORIGINS`.
+
+### 4. Apply migrations
+
+From `backend/`:
+
+```powershell
+..\.venv\Scripts\python.exe -m alembic upgrade head
+..\.venv\Scripts\python.exe -m alembic current
+```
+
+If the path with a space is inconvenient, use `py -3.10` with the installed dependencies:
+
+```powershell
+py -3.10 -m alembic upgrade head
+py -3.10 -m alembic current
+```
+
+Expected revision: `add_structured_requirements (head)`.
+
+### 5. Install the frontend
+
+From `frontend/`:
+
+```powershell
+npm ci
+```
+
+`npm ci` uses the committed `package-lock.json`.
+
 ---
 
-## ⚙️ Configuration
+## Environment variables
 
-### Extending Skills Taxonomy
-The skill catalog is located at [data/skills.json](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/data/skills.json). To add new domain-specific tools or soft skills, append entries into the respective list:
+### Backend
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `APP_NAME` | No | `AI Resume Screening Backend` | API title |
+| `APP_VERSION` | No | `0.1.0` | Version metadata |
+| `DEBUG` | No | `false` | SQL echo/debug mode; keep false in deployment |
+| `API_PREFIX` | No | `/api/v1` | API route prefix |
+| `CORS_ORIGINS` | Yes in deployment | local Next.js origins | JSON array of allowed browser origins |
+| `POSTGRES_HOST` | Yes | `localhost` | PostgreSQL host |
+| `POSTGRES_PORT` | Yes | `5432` | PostgreSQL port |
+| `POSTGRES_DB` | Yes | `resume_screening` | Database name |
+| `POSTGRES_USER` | Yes | `resume_user` | Database user |
+| `POSTGRES_PASSWORD` | Yes | development-only value | Database password |
+| `UPLOAD_STORAGE_DIR` | No | `storage/uploads` | Directory for original uploaded files; point at persistent storage |
+| `TEST_DATABASE_URL` | Tests only | unset | Disposable test database URL; must end in `_test` and differ from the main DB |
+| `SEMANTIC_MODEL_NAME` | No | `sentence-transformers/all-MiniLM-L6-v2` | Sentence Transformers repository name |
+| `SEMANTIC_MODEL_REVISION` | No | `1110a243fdf4706b3f48f1d95db1a4f5529b4d41` | Verified model snapshot; use `main` only intentionally |
+| `HF_HOME` | No | Hugging Face default | Model cache root; make persistent in deployment |
+| `HF_HUB_OFFLINE` | No | unset/`0` | Set `1` to prevent downloads and fail cleanly from cache |
+| `HF_HUB_DISABLE_TELEMETRY` | No | unset | Set `1` to disable Hugging Face telemetry |
+
+### Frontend
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `NEXT_PUBLIC_BACKEND_URL` | Yes for deployment | `http://localhost:8000` | Backend origin used by the browser |
+
+`NEXT_PUBLIC_*` variables are public and are compiled into the browser bundle. Never put secrets in them.
+
+Full deployment configuration is in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+---
+
+## Model download and cache
+
+- Model: `sentence-transformers/all-MiniLM-L6-v2`.
+- Pinned revision: `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`.
+- Tokenizer: `BertTokenizerFast`; verified maximum sequence length: 256; embedding dimension: 384.
+- The model is loaded lazily once per process. Requirement and chunk embeddings use bounded in-process LRU caches, so a model is not reloaded for every candidate.
+- On first use, Hugging Face downloads the pinned snapshot into its cache. Set `HF_HOME` to a persistent directory and keep it across restarts.
+- `HF_HUB_OFFLINE=1` prevents downloads; if the cache is absent, semantic inference fails safely and the API reports fallback metadata instead of crashing.
+- Loading errors are classified as package, import, DLL, download/cache, or loading failures.
+- The pinned snapshot was verified locally to match the unpinned cached snapshot in config, tokenizer vocabulary, weights, and sample embeddings. Cross-environment bit-for-bit reproducibility is not claimed.
+
+---
+
+## Running the application
+
+### Development backend
+
+From `backend/`:
+
+```powershell
+py -3.10 -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+- Health: `http://localhost:8000/health`
+- Swagger: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+### Development frontend
+
+From `frontend/`:
+
+```powershell
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+### Production mode locally
+
+From `frontend/`:
+
+```powershell
+npm run lint
+npx tsc --noEmit
+npm run build
+npm start -- -p 3000
+```
+
+From `backend/`:
+
+```powershell
+py -3.10 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+`--reload` must not be used in production.
+
+---
+
+## Testing
+
+### Backend
+
+Tests require an explicitly disposable database. The test suite refuses to run against the main database.
+
+```powershell
+$env:TEST_DATABASE_URL='postgresql+asyncpg://resume_user:resume_dev_password@localhost:5432/resume_screening_test'
+Set-Location backend
+py -3.10 -m pytest -q
+```
+
+The database name must end in `_test`. Database-backed fixtures roll back writes.
+
+Final verification result: **317 passed, 2 warnings**. The warnings are dependency deprecations from AnyIO/Pytest and the FastAPI/Starlette test client; no test was skipped or weakened.
+
+### Frontend
+
+From `frontend/`:
+
+```powershell
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+Final verification: ESLint clean, TypeScript clean, production build successful for `/` and `/_not-found`.
+
+### Benchmark framework
+
+Phase 11.5 tests are synthetic framework-validation tests only:
+
+```powershell
+Set-Location backend
+py -3.10 -m pytest -q tests/test_phase11_5_benchmark.py
+```
+
+Real benchmark evaluation remains blocked because no genuine human-labelled JD/resume dataset exists. No accuracy claim is made.
+
+---
+
+## Production build and deployment
+
+### Build
+
+Backend has no separate build artifact; install dependencies and run Alembic plus Uvicorn.
+
+Frontend:
+
+```powershell
+Set-Location frontend
+npm ci
+npm run lint
+npx tsc --noEmit
+npm run build
+```
+
+Set `NEXT_PUBLIC_BACKEND_URL` before `npm run build`.
+
+### Deploy
+
+- **Frontend:** Vercel or a Node host/container running `npm start`.
+- **Backend:** container service, VM, or PaaS running `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+- **Database:** PostgreSQL 16; apply `alembic upgrade head` as a release step.
+- **CORS:** add the deployed frontend origin to `CORS_ORIGINS`.
+- **Storage:** mount a persistent volume at the path in `UPLOAD_STORAGE_DIR`; the container filesystem alone is not durable.
+- **Model cache:** mount or preload a persistent `HF_HOME`; use `HF_HUB_OFFLINE=1` if downloads are disallowed.
+- **Health check:** `GET /health`.
+
+Exact manual steps are in [DEPLOYMENT.md](DEPLOYMENT.md). No deployment was performed automatically as part of final preparation.
+
+---
+
+## Database and persistence
+
+### Tables
+
+- `jobs`: title, description, flat skills, qualifications, experience text, `structured_requirements` JSONB, `analysis_data` JSONB.
+- `resumes`: original filename, file type, candidate info JSONB, extracted text, skills JSONB, storage key, processing status.
+- `screening_results`: scores, matched/missing/additional skills, explanation, evidence JSONB, requirement matches JSONB, scoring strategy JSONB. Unique on `(job_id, resume_id)`.
+
+### Migration chain
+
+1. `525a95dee632` — initial schema.
+2. `add_evidence_fields` — evidence and scoring columns.
+3. `add_structured_requirements` — `jobs.structured_requirements`.
+
+### Backup and retention
+
+- Back up PostgreSQL with normal database backups.
+- Back up `UPLOAD_STORAGE_DIR`; the database stores only storage keys.
+- Generated reports are in-memory and disappear when the API restarts.
+- There is no UI or API for deleting jobs/resumes; plan retention explicitly.
+
+---
+
+## API
+
+Base path: `/api/v1`
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness/version check |
+| `POST` | `/jobs/analyze` | Analyze and persist a job description |
+| `GET` | `/jobs/{job_id}` | Retrieve a stored job analysis |
+| `POST` | `/resumes/upload` | Upload and process one or more resumes (`files` multipart field) |
+| `GET` | `/resumes/{resume_id}` | Retrieve a stored resume |
+| `POST` | `/matching/evaluate` | Rank candidates for a job |
+| `POST` | `/reports/generate` | Generate a JSON or CSV report |
+| `GET` | `/reports/{report_id}` | Retrieve a generated report from the in-memory store |
+
+Example matching request:
 
 ```json
 {
-  "technical_skills": [
-    "Python",
-    "Kubernetes",
-    "YourCustomFramework"
-  ],
-  "soft_skills": [
-    "Leadership",
-    "Negotiation",
-    "YourDomainSkill"
-  ]
+  "job_id": "<uuid>",
+  "resume_ids": ["<uuid>"],
+  "use_semantic": true
 }
 ```
-The regex engine automatically handles word boundary compilation and casing invariance on next run without requiring application restarts.
 
-### Adjusting Match Weights
-Matching weights can be tuned in [src/resume_matcher.py](file:///c:/Users/omkal/Documents/antigravity/dazzling-hypatia/src/resume_matcher.py#L192-L197):
-
-```python
-# Default configuration:
-# 30% TF-IDF, 40% Semantic Embeddings, 30% Skill Coverage
-raw_overall = (0.3 * tfidf_score) + (0.4 * semantic_score) + (0.3 * skill_match_score)
-```
+The matching response includes per-candidate scores, matched/missing/additional skills, evidence, requirement evaluations, group evaluation, strengths, gaps, explanation, `scoring_strategy`, and an `error` field for failed candidates.
 
 ---
 
-## 🔒 Privacy & Ethics
+## Scoring and structured requirements
 
-- **Zero Cloud Transmission**: All document extraction, text parsing, embedding generation, and scoring computations execute entirely on local compute infrastructure. No resume content is sent to third-party generative APIs or external hosted endpoints.
-- **In-Memory Streaming**: Documents are ingested as in-memory byte streams (`io.BytesIO`) and discarded after processing. No applicant data or uploaded files are persisted to local disk storage unless explicitly exported by the user.
-- **Fairness & Bias Mitigation**: The scoring algorithm evaluates candidate qualifications solely on verifiable linguistic evidence, validated skills, and contextual experience descriptions. Demographic identifiers (e.g., gender, race, age, address) are explicitly excluded from mathematical match weight computations.
+### Default weights
+
+Defined in `backend/app/services/scoring_service.py`:
+
+| Component | Weight |
+|---|---:|
+| Required-skill coverage | 35% |
+| Preferred-skill coverage | 15% |
+| Semantic similarity | 30% |
+| Evidence strength | 20% |
+| TF-IDF similarity | 0% (computed only when enabled in code) |
+
+These weights were not changed during final preparation.
+
+### Behavior
+
+- Structured requirements are authoritative when present.
+- `ANY`: one matched alternative satisfies the group; unmatched alternatives in a satisfied group are not gaps.
+- `ALL`: every member must match.
+- Related-skill partial credit threshold is `0.5`.
+- Education-aware keyword-stuffing analysis is enabled but its score penalty is disabled by default.
+- If semantic inference is unavailable, the semantic weight is removed and the non-semantic configured weights are renormalized: required skills 0.35/0.70 ≈ 50%, preferred skills 0.15/0.70 ≈ 21.4%, evidence 0.20/0.70 ≈ 28.6%, TF-IDF 0%. `scoring_strategy.fallback_used` is set to `true`, and `semantic_status` is `model_unavailable`, `inference_failed`, or `empty_text`.
+- `skill_match_score` is an alias of required-skill coverage for backward compatibility.
+
+Scores are decision-support signals. They are not objective measures of candidate quality or hiring recommendations.
 
 ---
 
-## ⚠️ Limitations
+## Known limitations
 
-- **Scanned / Image-Based PDFs**: The system includes a heuristic scanner detector (flagging documents with fewer than 30 characters per page). Pure image scans require an OCR pre-processing step (such as Tesseract OCR) to extract raw text prior to ingestion.
-- **Complex Multi-Column Tables**: While standard Word tables and single/double column layouts are handled, heavily nested or non-standard graphic resumes may require manual verification of reading order.
-- **Language Scope**: The current text preprocessor and skill database are optimized for English-language resumes. Non-English resumes may require additional stopword corpora and localized skill dictionaries.
-- **Model Initialization**: On initial execution, the `all-MiniLM-L6-v2` Sentence Transformer weights (~80 MB) are downloaded once to local cache. Ensure active internet connectivity during the first run.
+1. **Ranking accuracy is unverified.** No genuine human-labelled held-out benchmark exists. Phase 11.5 infrastructure exists, but its real-data evaluation is pending and no accuracy claim is permitted.
+2. **No authentication or authorization.** Anyone who can reach the API can read or create data.
+3. **Development credentials and CORS defaults** are suitable only for local use.
+4. **No rate limiting, audit logging, tenant isolation, or formal security/privacy/fairness audit.**
+5. **PostgreSQL is published on all host interfaces** by the local Compose file.
+6. **Uploaded files use local filesystem storage.** A persistent volume or host directory is required in deployment.
+7. **Generated reports are in memory** and disappear on API restart.
+8. **Screening results are write-only through the public API**; there is no listing endpoint.
+9. **No OCR.** Scanned/image-only PDFs require external OCR.
+10. **English-oriented heuristics** and skill taxonomy.
+11. **Structured requirement parsing is heuristic** and may miss unusual phrasing.
+12. **The semantic model revision is pinned locally**, but cross-environment reproducibility is not claimed. On this Windows environment, importing scikit-learn before torch can trigger a torch DLL initialization conflict; the service falls back safely. Preload `sentence_transformers` before the application service if semantic inference is required in a similar environment.
+13. **No browser-level E2E automation.** Final UI verification used lint, typecheck, production build, served-page checks, and direct API contract checks.
+14. **Historical phase reports are not part of the release.** This README and `DEPLOYMENT.md` are the authoritative current documentation.
+15. **The working tree is uncommitted** and contains extensive historical deletions/dirty work; do not run destructive Git cleanup.
+16. **No license file is included.**
 
 ---
 
-## 📄 License
+## GitHub handoff
 
-This project is licensed under the **MIT License**. See the `LICENSE` file for details.
+The working tree is intentionally left uncommitted. Review Git status before pushing; do not stage, commit, or push automatically.
+
+Generated artifacts that should remain ignored:
+
+- `backend/**/__pycache__/`, `.pytest_cache/`
+- `frontend/node_modules/`, `frontend/.next/`, `frontend/out/`
+- real `.env`, `.env.local`, and backend `.env` files
+- uploaded resumes and generated PDF/DOCX files
+- model caches and large datasets
+
+Committed environment templates:
+
+- `.env.example`
+- `frontend/.env.example` (explicitly unignored)
+
+No real secrets should be committed. If a secret was ever committed historically, rotate it before pushing.
+
+The repository has a large number of historical dirty/deleted paths from prior phases. This is pre-existing state; preserve it and explain it rather than cleaning it automatically.
 
 ---
 
-## 👥 Contributors
+## Documentation
 
-- **Om Kale**
-- **Daksh Padmavat**
-- **Viraj Patil**
-- **Vikrant Kothavale** 
+- [DEPLOYMENT.md](DEPLOYMENT.md) — manual deployment instructions.
+- [backend/README.md](backend/README.md) — backend-only quick start and layout.
+- API reference — run the backend and open `/docs`.

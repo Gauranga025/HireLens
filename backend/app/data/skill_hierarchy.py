@@ -3,7 +3,7 @@ Skill Hierarchy Registry
 Centralized, configurable skill relationship system.
 Distinguishes between aliases, equivalents, parent-child, related, and unrelated technologies.
 """
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Optional
 from enum import Enum
 from dataclasses import dataclass
 

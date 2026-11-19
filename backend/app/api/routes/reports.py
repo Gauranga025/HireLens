@@ -1,4 +1,5 @@
 import logging
+from dataclasses import asdict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -6,10 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.repository import report_repository
 from app.db.session import get_db
-from app.repositories.job_repository import JobRepository
+from app.repositories.job_repository import JobRepository, get_structured_requirements
 from app.repositories.resume_repository import ResumeRepository
 from app.schemas.api import ReportResponse
+from app.services.candidate_evaluation_service import (
+    CandidateEvaluationContext,
+    CandidateEvaluationService,
+)
 from app.services.report_service import generate_csv_report, generate_json_report
+from app.services.scoring_service import ScoringConfig
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 logger = logging.getLogger(__name__)
@@ -90,19 +96,34 @@ async def generate_report(
         )
 
     try:
-        candidate_info = resume.candidate_info
-        job_analysis = job.analysis_data
-        job_title = job_analysis.get("title", "Not specified")
+        candidate_info = resume.candidate_info or {}
+        job_analysis = job.analysis_data or {}
+        job_title = job_analysis.get("title", job.title or "Not specified")
 
-        from app.services.matching_service import compute_match
-
-        match_dict = compute_match(
-            resume_text=resume.extracted_text,
-            job_text=job_analysis.get("raw_text", ""),
-            resume_skills=resume.skills,
-            job_skills=job_analysis.get("required_skills", []),
-            use_semantic=True,
+        # Use the same unified evaluation pipeline and configuration as
+        # /matching/evaluate so exported scores match the displayed scores.
+        structured_requirements = get_structured_requirements(job)
+        evaluation_service = CandidateEvaluationService(
+            scoring_config=ScoringConfig(
+                keyword_stuffing_education_aware=True,
+                related_skill_credit_threshold=0.5,
+            )
         )
+        context = CandidateEvaluationContext(
+            resume_text=resume.extracted_text,
+            job_text=job.description or job_analysis.get("raw_text", ""),
+            resume_skills=resume.skills,
+            required_skills=job.required_skills or job_analysis.get("required_skills", []),
+            preferred_skills=(
+                job.preferred_skills
+                or job_analysis.get("preferred_skills", [])
+            ),
+            use_semantic=True,
+            experience_metadata=candidate_info.get("experience", []),
+            project_metadata=candidate_info.get("projects", []),
+            structured_requirements=structured_requirements,
+        )
+        match_dict = asdict(evaluation_service.evaluate_candidate(context))
 
         if format == "json":
             content = generate_json_report(

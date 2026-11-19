@@ -1,7 +1,5 @@
 from contextlib import asynccontextmanager
 import logging
-import sys
-import os
 
 # Import torch early to prevent DLL initialization conflicts with FastAPI
 # This must be imported before FastAPI app initialization

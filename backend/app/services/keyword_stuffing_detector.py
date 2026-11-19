@@ -2,7 +2,7 @@
 Keyword Stuffing Detection Service
 Detects excessive skill listing without demonstrated experience.
 """
-from typing import Dict, List, Optional
+from typing import Dict, List
 from dataclasses import dataclass
 
 

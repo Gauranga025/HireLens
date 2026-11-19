@@ -1,0 +1,47 @@
+{
+  "schema_version": "phase11_5_annotation_v1",
+  "rubric_version": "phase11_5_relevance_v1",
+  "status": "awaiting_real_data",
+  "binary_relevance_threshold": 2,
+  "mrr_target_grade": 3,
+  "instructions": [
+    "Populate jobs and resumes only with real, anonymized JD and resume text.",
+    "Assign grades independently before discussing with other reviewers.",
+    "Never use a semantic model, its score, or its rank to assign a grade.",
+    "Every annotation needs a reviewer_id, grade, and short evidence-based rationale.",
+    "Record strengths, missing qualifications, and an evidence_reference (line/section).",
+    "Resolve disagreements explicitly with adjudication_status and adjudicated_grade.",
+    "Do not add names, emails, phone numbers, or other unnecessary personal information."
+  ],
+  "reviewers": [],
+  "rubric": [
+    {
+      "grade": 0,
+      "meaning": "Not relevant: different role or no required stack; no evidence the candidate can do the core work.",
+      "example": "Frontend-only portfolio reviewed against a backend/PostgreSQL role."
+    },
+    {
+      "grade": 1,
+      "meaning": "Weak match: adjacent domain or generic terminology overlap only; multiple key requirements missing.",
+      "example": "General software engineer resume with no Python/FastAPI evidence for a Python API role."
+    },
+    {
+      "grade": 2,
+      "meaning": "Partial match: core stack with partial/indirect evidence, or most requirements with one important gap.",
+      "example": "Python developer with Django but no FastAPI or async API experience for a FastAPI role."
+    },
+    {
+      "grade": 3,
+      "meaning": "Strong match: nearly all required skills with demonstrated experience or projects.",
+      "example": "Python developer with FastAPI and PostgreSQL projects; missing optional AWS."
+    },
+    {
+      "grade": 4,
+      "meaning": "Excellent match: all required skills with clear recent evidence plus most preferred skills and ownership.",
+      "example": "Python/FastAPI/PostgreSQL engineer with deployed services, tests, and clear ownership."
+    }
+  ],
+  "jobs": [],
+  "resumes": [],
+  "annotations": []
+}

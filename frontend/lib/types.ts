@@ -61,7 +61,38 @@ export interface AnalyzedJobDescription {
   preferred_skills: string[];
   qualifications: string[];
   experience_required: string;
+  structured_requirements?: StructuredRequirement[];
   raw_text: string;
+}
+
+export interface StructuredSkill {
+  skill: string;
+  normalized_skill?: string | null;
+  original_text: string;
+}
+
+export interface StructuredRequirementData {
+  skill?: string;
+  normalized_skill?: string;
+  group_name?: string;
+  match_mode?: 'ANY' | 'ALL';
+  skills?: StructuredSkill[];
+  min_years?: number | null;
+  max_years?: number | null;
+  experience_type?: 'professional' | 'internship' | 'any';
+  original_text?: string;
+}
+
+export interface StructuredRequirement {
+  requirement_type:
+    | 'REQUIRED'
+    | 'REQUIRED_GROUP'
+    | 'PREFERRED'
+    | 'OPTIONAL'
+    | 'EXPERIENCE'
+    | 'FUNDAMENTAL';
+  data: StructuredRequirementData;
+  original_text: string;
 }
 
 export interface JobAnalysisRequest {
@@ -86,6 +117,11 @@ export interface SkillEvidence {
   strength: string;
   start_offset?: number;
   end_offset?: number;
+  demonstration_level?: string | null;
+  date_info?: Record<string, unknown> | null;
+  experience_type?: string | null;
+  project_info?: Record<string, unknown> | null;
+  temporal_info?: Record<string, unknown> | null;
 }
 
 export interface RequirementMatch {
@@ -102,6 +138,50 @@ export interface ScoringStrategy {
   weights: Record<string, number>;
   semantic_available: boolean;
   fallback_used: boolean;
+  skill_hierarchy_enabled?: boolean;
+  demonstration_levels_enabled?: boolean;
+  keyword_stuffing_penalty_enabled?: boolean;
+  keyword_stuffing_education_aware?: boolean;
+  related_skill_credit_threshold?: number;
+  evaluation_date?: string | null;
+}
+
+export interface RequirementEvaluation {
+  skill: string;
+  requirement_type: string;
+  matched: boolean;
+  match_type: string | null;
+  evidence_level: string | null;
+  source_section: string | null;
+  evidence: string | null;
+  source_reference: string | null;
+  experience_type: string | null;
+  project_info: Record<string, unknown> | null;
+  satisfied_by_group?: boolean;
+}
+
+export interface GroupEvaluation {
+  requirement_type: string;
+  match_mode: string;
+  group_name: string;
+  required_skills: string[];
+  matched_skills: string[];
+  is_satisfied: boolean;
+  original_text: string;
+}
+
+export interface EvidenceSummary {
+  demonstrated_skills: string[];
+  mentioned_skills: string[];
+  unsupported_required_skills: string[];
+  unsupported_preferred_skills: string[];
+}
+
+export interface KeywordStuffingAnalysis {
+  is_stuffed: boolean;
+  stuffing_ratio: number;
+  total_skills: number;
+  skills_without_evidence: number;
 }
 
 export interface MatchResult {
@@ -118,6 +198,15 @@ export interface MatchResult {
   required_skill_coverage: number;
   preferred_skill_coverage: number;
   scoring_strategy?: ScoringStrategy;
+  evidence_score?: number | null;
+  evidence_summary?: EvidenceSummary;
+  requirement_evaluations?: Record<string, RequirementEvaluation>;
+  strengths?: string[];
+  gaps?: string[];
+  temporal_metadata?: Record<string, unknown> | null;
+  keyword_stuffing_penalty?: number;
+  keyword_stuffing_analysis?: KeywordStuffingAnalysis | null;
+  group_evaluation?: GroupEvaluation[];
 }
 
 export interface CandidateMatchResult {

@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 interface ScreeningProgressProps {
   isScreening: boolean;

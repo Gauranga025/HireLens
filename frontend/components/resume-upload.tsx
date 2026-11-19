@@ -2,10 +2,10 @@
 
 import { useState, useCallback } from 'react';
 import { Upload, X, FileText, AlertCircle } from 'lucide-react';
-import { apiClient } from '@/lib/api-client';
 import type { UploadedFile } from '@/lib/types';
 
 interface ResumeUploadProps {
+  files: UploadedFile[];
   onFilesUploaded: (files: UploadedFile[]) => void;
   disabled?: boolean;
 }
@@ -14,8 +14,7 @@ const MAX_FILES = 10;
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_TYPES = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
 
-export function ResumeUpload({ onFilesUploaded, disabled }: ResumeUploadProps) {
-  const [files, setFiles] = useState<UploadedFile[]>([]);
+export function ResumeUpload({ files, onFilesUploaded, disabled }: ResumeUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
 
   const validateFile = (file: File): string | null => {
@@ -64,7 +63,6 @@ export function ResumeUpload({ onFilesUploaded, disabled }: ResumeUploadProps) {
 
     if (newFiles.length > 0) {
       const updatedFiles = [...files, ...newFiles];
-      setFiles(updatedFiles);
       onFilesUploaded(updatedFiles);
     }
   }, [files, disabled, onFilesUploaded]);
@@ -86,7 +84,6 @@ export function ResumeUpload({ onFilesUploaded, disabled }: ResumeUploadProps) {
 
   const handleRemoveFile = (index: number) => {
     const updatedFiles = files.filter((_, i) => i !== index);
-    setFiles(updatedFiles);
     onFilesUploaded(updatedFiles);
   };
 
@@ -162,6 +159,9 @@ export function ResumeUpload({ onFilesUploaded, disabled }: ResumeUploadProps) {
                         <AlertCircle className="h-4 w-4" />
                         <span className="text-xs">{uploadedFile.error}</span>
                       </div>
+                    )}
+                    {uploadedFile.status === 'success' && (
+                      <span className="ml-2 text-xs text-green-600">Uploaded</span>
                     )}
                     <button
                       onClick={() => handleRemoveFile(index)}

@@ -1,5 +1,6 @@
 from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.ext.asyncio import async_sessionmaker, AsyncSession
 
@@ -47,7 +48,7 @@ async def check_database_connectivity() -> bool:
     
     try:
         async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
+            await conn.execute(text("SELECT 1"))
         return True
     except Exception:
         return False

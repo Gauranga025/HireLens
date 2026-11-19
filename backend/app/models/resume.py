@@ -1,5 +1,4 @@
 from typing import Optional, List, Dict
-from uuid import UUID
 
 from sqlalchemy import Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB

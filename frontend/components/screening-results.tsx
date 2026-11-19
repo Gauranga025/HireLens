@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from 'react';
-import { ChevronDown, ChevronUp, Download } from 'lucide-react';
+import { Fragment, useState } from 'react';
+import { AlertCircle, ChevronDown, ChevronUp, Download } from 'lucide-react';
 import { apiClient } from '@/lib/api-client';
 import type { MatchingResponse, CandidateMatchResult } from '@/lib/types';
 import { CandidateAnalysis } from './candidate-analysis';
@@ -75,73 +75,108 @@ export function ScreeningResults({ results, jobId }: ScreeningResultsProps) {
                 </tr>
               </thead>
               <tbody>
-                {results.results.map((candidate, index) => (
-                  <>
-                    <tr
-                      key={candidate.resume_id}
-                      className="border-t border-border hover:bg-muted/30 cursor-pointer"
-                      onClick={() => setExpandedCandidate(expandedCandidate === candidate.resume_id ? null : candidate.resume_id)}
-                    >
-                      <td className="px-4 py-3 text-sm font-medium">#{index + 1}</td>
-                      <td className="px-4 py-3">
-                        <div>
-                          <p className="text-sm font-medium">{candidate.candidate_name}</p>
-                          <p className="text-xs text-muted-foreground">{candidate.filename}</p>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-lg font-semibold ${getScoreColor(candidate.match_result.overall_score)}`}>
-                            {candidate.match_result.overall_score.toFixed(1)}%
-                          </span>
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getScoreBackground(candidate.match_result.overall_score)}`}>
-                            {candidate.match_result.overall_score >= 80 ? 'High' : candidate.match_result.overall_score >= 60 ? 'Medium' : 'Low'}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-sm">
-                        <span className="text-muted-foreground">
-                          {candidate.match_result.matched_skills.length} / {candidate.match_result.matched_skills.length + candidate.match_result.missing_skills.length}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setExpandedCandidate(expandedCandidate === candidate.resume_id ? null : candidate.resume_id);
-                            }}
-                            className="p-1 hover:bg-muted rounded transition-colors"
-                          >
-                            {expandedCandidate === candidate.resume_id ? (
-                              <ChevronUp className="h-4 w-4" />
-                            ) : (
-                              <ChevronDown className="h-4 w-4" />
+                {results.results.map((candidate, index) => {
+                  const failed = Boolean(candidate.error);
+                  const isExpanded = !failed && expandedCandidate === candidate.resume_id;
+
+                  return (
+                    <Fragment key={candidate.resume_id}>
+                      <tr
+                        className={`border-t border-border ${
+                          failed ? 'bg-red-50/50 dark:bg-red-900/10' : 'hover:bg-muted/30 cursor-pointer'
+                        }`}
+                        onClick={() =>
+                          !failed &&
+                          setExpandedCandidate(
+                            expandedCandidate === candidate.resume_id ? null : candidate.resume_id
+                          )
+                        }
+                      >
+                        <td className="px-4 py-3 text-sm font-medium">#{index + 1}</td>
+                        <td className="px-4 py-3">
+                          <div>
+                            <p className="text-sm font-medium">{candidate.candidate_name}</p>
+                            <p className="text-xs text-muted-foreground">{candidate.filename}</p>
+                            {failed && (
+                              <p className="text-xs text-red-600 flex items-center gap-1 mt-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {candidate.error}
+                              </p>
                             )}
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleExport(candidate, 'csv');
-                            }}
-                            disabled={exportingCandidate === candidate.resume_id}
-                            className="p-1 hover:bg-muted rounded transition-colors disabled:opacity-50"
-                            title="Export CSV"
-                          >
-                            <Download className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {expandedCandidate === candidate.resume_id && (
-                      <tr>
-                        <td colSpan={5} className="px-4 py-4 bg-muted/20">
-                          <CandidateAnalysis candidate={candidate} />
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {failed ? (
+                            <span className="px-2 py-1 rounded-full text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400">
+                              Not evaluated
+                            </span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className={`text-lg font-semibold ${getScoreColor(candidate.match_result.overall_score)}`}>
+                                {candidate.match_result.overall_score.toFixed(1)}%
+                              </span>
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${getScoreBackground(candidate.match_result.overall_score)}`}>
+                                {candidate.match_result.overall_score >= 80 ? 'High' : candidate.match_result.overall_score >= 60 ? 'Medium' : 'Low'}
+                              </span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-sm">
+                          <span className="text-muted-foreground">
+                            {failed
+                              ? '—'
+                              : `${candidate.match_result.matched_skills.length} / ${
+                                  candidate.match_result.matched_skills.length +
+                                  candidate.match_result.missing_skills.length
+                                }`}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          {failed ? (
+                            <span className="text-xs text-muted-foreground">Unavailable</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setExpandedCandidate(
+                                    expandedCandidate === candidate.resume_id ? null : candidate.resume_id
+                                  );
+                                }}
+                                className="p-1 hover:bg-muted rounded transition-colors"
+                                aria-label={isExpanded ? 'Collapse candidate details' : 'Expand candidate details'}
+                              >
+                                {isExpanded ? (
+                                  <ChevronUp className="h-4 w-4" />
+                                ) : (
+                                  <ChevronDown className="h-4 w-4" />
+                                )}
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleExport(candidate, 'csv');
+                                }}
+                                disabled={exportingCandidate === candidate.resume_id}
+                                className="p-1 hover:bg-muted rounded transition-colors disabled:opacity-50"
+                                title="Export CSV"
+                              >
+                                <Download className="h-4 w-4" />
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
-                    )}
-                  </>
-                ))}
+                      {isExpanded && (
+                        <tr>
+                          <td colSpan={5} className="px-4 py-4 bg-muted/20">
+                            <CandidateAnalysis candidate={candidate} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

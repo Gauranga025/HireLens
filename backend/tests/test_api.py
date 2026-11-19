@@ -1,17 +1,8 @@
 import io
-import asyncio
-from uuid import UUID
 from typing import AsyncGenerator
 
 import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-
-from app.main import app
-from app.db.base import Base
-from app.db.database import init_database, close_database
-from app.models import Job, Resume, ScreeningResult
-from app.core.config import settings
+from httpx import AsyncClient
 
 try:
     import pymupdf as fitz
@@ -21,59 +12,10 @@ except ImportError:
     HAS_PARSING = False
 
 
-# Test database URL (using the same PostgreSQL for integration tests)
-TEST_DATABASE_URL = settings.DATABASE_URL
-
-
 @pytest.fixture
-async def db_engine():
-    """Create a test database engine."""
-    engine = create_async_engine(TEST_DATABASE_URL, echo=False)
-    yield engine
-    await engine.dispose()
-
-
-@pytest.fixture
-async def db_session(db_engine) -> AsyncGenerator[AsyncSession, None]:
-    """Create a test database session."""
-    async_session_maker = async_sessionmaker(
-        db_engine, class_=AsyncSession, expire_on_commit=False
-    )
-    async with async_session_maker() as session:
-        yield session
-
-
-@pytest.fixture
-async def clean_database(db_session: AsyncSession):
-    """Clean database tables before and after each test."""
-    # Clean before test
-    await db_session.execute(ScreeningResult.__table__.delete())
-    await db_session.execute(Resume.__table__.delete())
-    await db_session.execute(Job.__table__.delete())
-    await db_session.commit()
-    
-    yield
-    
-    # Clean after test
-    await db_session.execute(ScreeningResult.__table__.delete())
-    await db_session.execute(Resume.__table__.delete())
-    await db_session.execute(Job.__table__.delete())
-    await db_session.commit()
-
-
-@pytest.fixture
-async def client(clean_database) -> AsyncGenerator[AsyncClient, None]:
-    """Create an async test client."""
-    # Initialize database for the test
-    from app.db import database
-    database.init_database()
-    
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-    
-    # Close database after test
-    await database.close_database()
+async def client(disposable_api_client) -> AsyncGenerator[AsyncClient, None]:
+    """ASGI client backed by the disposable, rollback-only test database."""
+    yield disposable_api_client
 
 
 def _create_sample_pdf(content: str = "Test resume content") -> bytes:

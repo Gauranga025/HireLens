@@ -4,7 +4,7 @@ Classifies experience entries by type (full-time, internship, research, etc.)
 and provides relevance scoring based on job requirements.
 """
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 from enum import Enum
 from dataclasses import dataclass
 
@@ -188,7 +188,7 @@ class ExperienceClassificationService:
         
         # Try to extract years
         year_pattern = re.compile(r"\b(19|20)\d{2}\b")
-        years = year_pattern.findall(duration)
+        years = [m.group(0) for m in year_pattern.finditer(duration)]
         
         if len(years) >= 2:
             start_date = years[0]

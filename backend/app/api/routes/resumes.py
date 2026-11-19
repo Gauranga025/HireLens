@@ -1,9 +1,8 @@
-import logging
-from typing import Any, List
+﻿import logging
+from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import DocumentProcessingError, UnsupportedFileTypeError, ValidationError
@@ -15,6 +14,9 @@ from app.services.document_service import extract_text, validate_file
 from app.services.file_storage_service import file_storage_service
 from app.services.resume_parser_service import extract_all
 from app.services.skill_service import extract_skills
+from app.services.experience_classification_service import ExperienceClassificationService
+from app.services.project_intelligence_service import ProjectIntelligenceService
+from app.services.temporal_service import TemporalService
 
 router = APIRouter(prefix="/resumes", tags=["resumes"])
 logger = logging.getLogger(__name__)
@@ -34,7 +36,7 @@ async def upload_resumes(
     Returns extraction results, candidate information, and extracted skills.
     """
     logger.info("=== UPLOAD ENDPOINT INVOKED ===")
-    
+
     results: List[ResumeUploadResponse] = []
     successful = 0
     failed = 0
@@ -62,9 +64,131 @@ async def upload_resumes(
 
             extracted_info = extract_all(extraction.text)
             skills_data = extract_skills(extraction.text)
-            
+
             extracted_info["skills"] = skills_data.get("technical_skills", []) + skills_data.get("soft_skills", [])
-            
+
+            # Classify experience entries
+            classifier = ExperienceClassificationService()
+            temporal_service = TemporalService()
+            classified_experience = []
+            for exp in extracted_info.get("experience", []):
+                classified = classifier.classify_experience(
+                    title=exp.get("title", ""),
+                    company=exp.get("company", ""),
+                    duration=exp.get("duration", ""),
+                    description="",
+                    section="experience"
+                )
+
+                # Add temporal metadata
+                temporal = temporal_service.generate_temporal_metadata(exp.get("duration", ""))
+
+                classified_experience.append({
+                    "title": classified.title,
+                    "company": classified.company,
+                    "duration": classified.duration,
+                    "experience_type": classified.experience_type.value,
+                    "start_date": temporal.start_date,
+                    "end_date": temporal.end_date,
+                    "is_current": temporal.is_current,
+                    "duration_months": temporal.duration_months,
+                    "recency_category": temporal.recency_category,
+                    "temporal_status": temporal.temporal_status,
+                    "date_confidence": temporal.date_confidence,
+                })
+            extracted_info["experience"] = classified_experience
+
+            # Classify and analyze projects
+            project_intelligence = ProjectIntelligenceService()
+            classified_projects = []
+            for proj in extracted_info.get("projects", []):
+                # Classify project type
+                classified = classifier.classify_experience(
+                    title=proj,
+                    company="",
+                    duration="",
+                    description="",
+                    section="projects"
+                )
+
+                # Extract project intelligence
+                from app.services.experience_classification_service import ExperienceEntry
+                project_entry = ExperienceEntry(
+                    title=proj,
+                    company="",
+                    duration="",
+                    experience_type=classified.experience_type,
+                    description=proj
+                )
+
+                evaluation = project_intelligence.evaluate_project(
+                    entry=project_entry,
+                    required_skills=extracted_info.get("skills", []),
+                    job_description=""
+                )
+
+                # Determine complexity level
+                complexity_level = "UNASSESSED"
+                if evaluation.complexity_score >= 70:
+                    complexity_level = "HIGH"
+                elif evaluation.complexity_score >= 40:
+                    complexity_level = "MEDIUM"
+                elif evaluation.complexity_score >= 10:
+                    complexity_level = "LOW"
+
+                # Extract complexity indicators from description
+                proj_lower = proj.lower()
+                indicators = []
+                for indicator in project_intelligence.complexity_indicators:
+                    if indicator.lower() in proj_lower:
+                        indicators.append(indicator)
+
+                # Extract implementation evidence (sentences with action verbs)
+                implementation_evidence = []
+                if len(proj) > 50:
+                    sentences = [s.strip() for s in proj.split('.') if s.strip()]
+                    for sentence in sentences:
+                        if any(word in sentence.lower() for word in ["implemented", "built", "developed", "created", "designed", "architected"]):
+                            implementation_evidence.append(sentence[:100])
+
+                # Extract measurable outcomes
+                measurable_outcomes = []
+                import re
+                outcome_patterns = [r"\d+%", r"\d+\s*(users|customers|clients)"]
+                for pattern in outcome_patterns:
+                    matches = re.findall(pattern, proj_lower)
+                    if matches:
+                        measurable_outcomes.append(f"Contains metric: {matches[0]}")
+
+                # Add temporal metadata (projects typically don't have duration strings, but we can try)
+                temporal = temporal_service.generate_temporal_metadata("")
+
+                classified_projects.append({
+                    "title": proj,
+                    "project_type": classified.experience_type.value,
+                    "technologies": evaluation.matched_skills,
+                    "complexity_indicators": indicators,
+                    "implementation_evidence": implementation_evidence,
+                    "measurable_outcomes": measurable_outcomes,
+                    "complexity_level": complexity_level,
+                    "description": proj,
+                    "start_date": temporal.start_date,
+                    "end_date": temporal.end_date,
+                    "is_current": temporal.is_current,
+                    "duration_months": temporal.duration_months,
+                    "recency_category": temporal.recency_category,
+                    "temporal_status": temporal.temporal_status,
+                    "date_confidence": temporal.date_confidence,
+                })
+            extracted_info["projects"] = classified_projects
+
+            # Generate candidate timeline
+            timeline = temporal_service.generate_timeline(
+                classified_experience,
+                classified_projects
+            )
+            extracted_info["timeline"] = timeline
+
             candidate_info = ExtractedResumeInfo(**extracted_info)
 
             file_ext = extraction.source_format
@@ -81,12 +205,9 @@ async def upload_resumes(
                 storage_key=storage_key,
                 processing_status="completed",
             )
-            logger.info(f"[DIAGNOSTIC] Resume created in DB, ID before commit: {resume.id}, type: {type(resume.id)}")
             await db.commit()
-            logger.info(f"[DIAGNOSTIC] Resume ID after commit: {resume.id}")
 
             resume_id_str = str(resume.id)
-            logger.info(f"[DIAGNOSTIC] Resume ID as string for response: {resume_id_str}")
 
             results.append(
                 ResumeUploadResponse(
@@ -99,7 +220,6 @@ async def upload_resumes(
                     error=None,
                 )
             )
-            logger.info(f"[DIAGNOSTIC] Appended result with resume_id: {resume_id_str}")
             successful += 1
 
         except UnsupportedFileTypeError as e:
@@ -186,7 +306,7 @@ async def get_resume(
 ) -> ResumeRetrieveResponse:
     """
     Retrieve a processed resume by its ID.
-    
+
     Returns the document extraction result and extracted candidate information.
     """
     try:
@@ -213,7 +333,7 @@ async def get_resume(
         is_scanned=resume.candidate_info.get("is_scanned", False),
         metadata=resume.candidate_info.get("metadata", {}),
     )
-    
+
     candidate_info = ExtractedResumeInfo(**resume.candidate_info)
 
     return ResumeRetrieveResponse(

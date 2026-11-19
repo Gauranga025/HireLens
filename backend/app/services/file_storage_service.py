@@ -1,9 +1,8 @@
-import os
-import shutil
 import uuid
 from pathlib import Path
 from typing import Final
 
+from app.core.config import settings
 from app.core.exceptions import ValidationError
 
 
@@ -167,4 +166,4 @@ class FileStorageService:
 
 
 # Global file storage service instance
-file_storage_service = FileStorageService()
+file_storage_service = FileStorageService(settings.UPLOAD_STORAGE_DIR)

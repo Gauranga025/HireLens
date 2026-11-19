@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "resume_screening"
     POSTGRES_USER: str = "resume_user"
     POSTGRES_PASSWORD: str = "resume_dev_password"
+
+    # Explicit, separately configured disposable database for automated tests.
+    # This must never fall back to DATABASE_URL.
+    TEST_DATABASE_URL: Optional[str] = None
+
+    # Local directory for uploaded resume files. In containers, point this at a
+    # mounted persistent volume; otherwise it stays relative to process CWD.
+    UPLOAD_STORAGE_DIR: str = "storage/uploads"
 
     @property
     def DATABASE_URL(self) -> str:

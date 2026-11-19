@@ -1,4 +1,4 @@
-# Byte-compiled / optimized / DLL files
+# Python bytecode and compiled extensions
 __pycache__/
 *.py[cod]
 *$py.class
@@ -7,10 +7,12 @@ __pycache__/
 # Virtual environments
 venv/
 env/
+ENV/
 .venv/
+.venv_clean/
 backend/.venv/
 
-# IDE
+# IDE and editor state
 .vscode/
 .idea/
 *.swp
@@ -26,52 +28,66 @@ build/
 # Uploaded files (privacy)
 uploads/
 storage/uploads/
+backend/storage/uploads/
 *.pdf
 *.docx
 
-# Database
+# Local databases and dumps
 *.db
 *.sqlite3
 *.sqlite
+*.dump
+*.sql.gz
 
 # Environment variables
 .env
 .env.*
 !.env.example
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# Model cache (root level only)
+# Model and Hugging Face caches
 /models/
 .cache/
+hf_cache/
+.huggingface/
 sentence-transformers/
+*.safetensors
+*.bin
+*.pt
+*.onnx
 
-# Pytest
+# Test, coverage, and type-checker caches
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .coverage
+coverage/
 htmlcov/
-.pytest_cache/
-backend/.pytest_cache/
+*.cover
+*.tsbuildinfo
 
-# Logs
+# Generated evaluation output
+backend/evaluation_results/
+backend/evaluation_results.json
+backend/evaluation/reports/PHASE11_5_EVALUATION_RESULTS.json
+PHASE11_4_SEMANTIC_EVALUATION_RESULTS.json
+
+# Logs and credentials
 *.log
+*.pem
 
 # Frontend / Next.js
 node_modules/
 .next/
 out/
 .vercel/
-frontend/.next/
 frontend/node_modules/
+frontend/.next/
 frontend/out/
-
-# Coverage
-.coverage
-htmlcov/
-*.cover
 
 # Temporary files
 *.tmp

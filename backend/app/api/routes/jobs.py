@@ -4,12 +4,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ValidationError
 from app.db.session import get_db
-from app.repositories.job_repository import JobRepository
+from app.repositories.job_repository import JobRepository, get_structured_requirements
 from app.schemas.api import JobAnalysisRequest, JobAnalysisResponse, JobRetrieveResponse
 from app.schemas.job import AnalyzedJobDescription
 from app.services.job_analysis_service import analyze_job_description
+from app.utils.serialization import serialize_for_jsonb
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 logger = logging.getLogger(__name__)
@@ -45,7 +45,8 @@ async def analyze_job(
             preferred_skills=analysis.preferred_skills,
             qualifications=analysis.qualifications,
             experience_required=analysis.experience_required,
-            analysis_data=analysis.model_dump(),
+            structured_requirements=serialize_for_jsonb(analysis.structured_requirements),
+            analysis_data=serialize_for_jsonb(analysis),
         )
         await db.commit()
 
@@ -90,7 +91,19 @@ async def get_job(
             detail=f"Job with ID '{job_id}' not found",
         )
 
-    analysis = AnalyzedJobDescription(**job.analysis_data)
+    # Prefer the dedicated structured_requirements column, which is also
+    # populated for jobs created after Phase 10.1. Merge flat/legacy fields as
+    # fallbacks so jobs persisted before structured requirements still load.
+    analysis_payload = dict(job.analysis_data or {})
+    analysis_payload["structured_requirements"] = get_structured_requirements(job)
+    analysis_payload.setdefault("title", job.title)
+    analysis_payload.setdefault("required_skills", job.required_skills or [])
+    analysis_payload.setdefault("preferred_skills", job.preferred_skills or [])
+    analysis_payload.setdefault("qualifications", job.qualifications or [])
+    analysis_payload.setdefault("experience_required", job.experience_required)
+    analysis_payload.setdefault("raw_text", job.description)
+
+    analysis = AnalyzedJobDescription(**analysis_payload)
 
     return JobRetrieveResponse(
         job_id=str(job.id),

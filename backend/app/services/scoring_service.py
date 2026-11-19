@@ -3,13 +3,19 @@ Scoring service for evidence-aware candidate matching.
 Combines skill coverage, semantic relevance, and evidence strength.
 """
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass
 
-from app.services.skill_service import match_skills_to_requirements
+from app.services.skill_service import (
+    collect_structured_preferred_skills,
+    match_skills_to_requirements,
+)
 from app.services.evidence_extraction_service import EvidenceExtractionService, EvidenceStrength, DemonstrationLevel
-from app.services.semantic_matching_service import SemanticMatchingService
+from app.services.semantic_matching_service import SemanticMatchingService, SemanticError
+from app.services.semantic_input_service import build_semantic_inputs
+from app.services.requirement_semantic_service import RequirementSemanticService
 from app.services.keyword_stuffing_detector import KeywordStuffingDetector
+from app.services.evidence_mapping_service import EvidenceMappingService
 from app.utils.text_processor import preprocess_for_tfidf
 from app.services.matching_service import tfidf_similarity
 
@@ -35,9 +41,9 @@ class ScoringConfig:
 
 class ScoringService:
     """Service for evidence-aware candidate scoring."""
-    
+
     ALGORITHM_VERSION = "2.1.1-fairness-improved"
-    
+
     def __init__(
         self,
         config: Optional[ScoringConfig] = None,
@@ -45,7 +51,7 @@ class ScoringService:
     ):
         """
         Initialize the scoring service.
-        
+
         Args:
             config: Scoring configuration (uses defaults if None).
             semantic_service: Semantic matching service (creates new if None).
@@ -53,11 +59,12 @@ class ScoringService:
         self.config = config or ScoringConfig()
         self.semantic_service = semantic_service or SemanticMatchingService()
         self.evidence_service = EvidenceExtractionService()
+        self.evidence_mapping_service = EvidenceMappingService()
         self.keyword_stuffing_detector = KeywordStuffingDetector(
             threshold=self.config.keyword_stuffing_threshold,
             education_aware=self.config.keyword_stuffing_education_aware,
         )
-    
+
     def compute_match(
         self,
         resume_text: str,
@@ -66,60 +73,110 @@ class ScoringService:
         required_skills: List[str],
         preferred_skills: List[str],
         use_semantic: bool = True,
+        experience_metadata: List[Dict] = None,
+        project_metadata: List[Dict] = None,
+        structured_requirements: List[Dict] = None,
     ) -> Dict[str, Any]:
         """
         Compute evidence-aware match score.
-        
+
         Args:
             resume_text: Full resume text.
             job_text: Full job description text.
             resume_skills: Skills extracted from resume.
-            required_skills: Required skills from job.
-            preferred_skills: Preferred skills from job.
+            required_skills: Required skills from job (backward compatibility).
+            preferred_skills: Preferred skills from job (backward compatibility).
             use_semantic: Whether to use semantic matching.
-            
+            experience_metadata: Experience entries with classification (from Phase 8.1).
+            project_metadata: Project entries with intelligence (from Phase 8.2).
+            structured_requirements: Structured requirements from Phase 10.1/10.2.
+
         Returns:
             Dictionary with match results and scoring metadata.
         """
-        # Extract skill evidence
+        # Extract skill evidence with experience/project context
         skill_evidence = self.evidence_service.extract_skill_evidence(
             resume_text,
             resume_skills,
+            experience_metadata,
+            project_metadata,
         )
-        
-        # Match skills to requirements (with hierarchy if enabled)
-        required_match = match_skills_to_requirements(
-            resume_skills, required_skills, 
-            use_hierarchy=self.config.use_skill_hierarchy,
-            related_skill_credit_threshold=self.config.related_skill_credit_threshold,
-        )
+
+        # Structured units are authoritative when present. Flat lists are used
+        # only as a legacy fallback and are never unioned with structured units.
+        if structured_requirements:
+            from app.services.skill_service import match_structured_requirements
+            required_match = match_structured_requirements(
+                resume_skills,
+                structured_requirements,
+                use_hierarchy=self.config.use_skill_hierarchy,
+                related_skill_credit_threshold=self.config.related_skill_credit_threshold,
+            )
+            effective_preferred_skills = collect_structured_preferred_skills(
+                structured_requirements
+            )
+        else:
+            required_match = match_skills_to_requirements(
+                resume_skills,
+                required_skills,
+                use_hierarchy=self.config.use_skill_hierarchy,
+                related_skill_credit_threshold=self.config.related_skill_credit_threshold,
+            )
+            effective_preferred_skills = []
+
+        preferred_scoring_skills = effective_preferred_skills or preferred_skills
         preferred_match = match_skills_to_requirements(
-            resume_skills, preferred_skills, 
+            resume_skills,
+            preferred_scoring_skills,
             use_hierarchy=self.config.use_skill_hierarchy,
             related_skill_credit_threshold=self.config.related_skill_credit_threshold,
         )
-        
-        # Calculate skill coverage scores
+
+        # Calculate skill coverage scores from actual hierarchy credit
         required_coverage = required_match["match_percentage"]
         preferred_coverage = preferred_match["match_percentage"]
-        
-        # Calculate evidence strength score (with demonstration levels if enabled)
+
+        # Evidence scoring accepts only required scoring units. Preferred skills
+        # and duplicate group alternatives are excluded by construction.
         evidence_score = self._calculate_evidence_score(
-            required_match["matched"],
+            required_match.get("required_units", []),
             skill_evidence,
             use_demonstration_levels=self.config.use_demonstration_levels,
         )
-        
-        # Calculate semantic similarity if available
-        semantic_score = None
-        if use_semantic and self.semantic_service.is_available():
-            semantic_score = self._calculate_semantic_score(
-                job_text,
-                resume_text,
-                required_skills,
-                skill_evidence,
-            )
-        
+
+        # Resolve one explicit semantic path for this evaluation.
+        semantic_score: Optional[float] = None
+        semantic_error: Optional[Dict[str, str]] = None
+        semantic_details: Optional[Dict[str, Any]] = None
+        semantic_model_available: Optional[bool] = None
+        semantic_empty_text = (
+            not (resume_text or "").strip() or not (job_text or "").strip()
+        )
+
+        if not use_semantic:
+            semantic_status = "disabled"
+        elif semantic_empty_text:
+            semantic_status = "empty_text"
+            semantic_model_available = self.semantic_service.is_available()
+        else:
+            semantic_model_available = self.semantic_service.is_available()
+            if not semantic_model_available:
+                semantic_status = "model_unavailable"
+                error_info = self.semantic_service.get_error_info()
+                if error_info:
+                    semantic_error = error_info
+            else:
+                (
+                    semantic_score,
+                    semantic_error,
+                    semantic_details,
+                ) = self._calculate_semantic_score(
+                    job_text,
+                    resume_text,
+                    structured_requirements,
+                )
+                semantic_status = "used" if semantic_score is not None else "inference_failed"
+
         # Calculate TF-IDF similarity (optional)
         tfidf_score = 0.0
         if self.config.tfidf_weight > 0:
@@ -127,34 +184,24 @@ class ScoringService:
                 preprocess_for_tfidf(resume_text),
                 preprocess_for_tfidf(job_text),
             )
-        
-        # Compute overall score
-        # Use fallback formula if semantic unavailable and was requested
-        if semantic_score is None and use_semantic:
-            # Fallback: 50% required + 50% preferred
-            overall_score = (0.5 * required_coverage) + (0.5 * preferred_coverage)
-            fallback_used = True
-            active_weights = {
-                "required_skills": 0.5,
-                "preferred_skills": 0.5,
-            }
-        else:
-            overall_score = self._compute_overall_score(
-                required_coverage,
-                preferred_coverage,
-                evidence_score,
-                semantic_score,
-                tfidf_score,
-            )
-            fallback_used = False
-            active_weights = {
-                "required_skills": self.config.required_skill_weight,
-                "preferred_skills": self.config.preferred_skill_weight,
-                "semantic": self.config.semantic_weight,
-                "evidence": self.config.evidence_weight,
-                "tfidf": self.config.tfidf_weight,
-            }
-        
+
+        configured_weights = self._configured_weights()
+        effective_weights = self._effective_weights(semantic_score is not None)
+        overall_score = self._compute_overall_score(
+            required_coverage,
+            preferred_coverage,
+            evidence_score,
+            semantic_score,
+            tfidf_score,
+            effective_weights,
+        )
+
+        fallback_used = semantic_status in {
+            "model_unavailable",
+            "inference_failed",
+            "empty_text",
+        }
+
         # Apply keyword stuffing penalty if enabled
         keyword_stuffing_penalty = 0.0
         keyword_stuffing_analysis = None
@@ -169,13 +216,18 @@ class ScoringService:
                 overall_score -= penalty_amount
                 keyword_stuffing_penalty = penalty_amount
                 overall_score = max(overall_score, 0.0)  # Ensure non-negative
-        
+
         # Build scoring strategy metadata
         scoring_strategy = {
             "algorithm_version": self.ALGORITHM_VERSION,
             "components": [],
-            "weights": active_weights,
+            "weights": effective_weights,
+            "configured_weights": configured_weights,
             "semantic_available": semantic_score is not None,
+            "semantic_status": semantic_status,
+            "semantic_model_available": semantic_model_available,
+            "semantic_error": semantic_error,
+            "semantic_details": semantic_details,
             "fallback_used": fallback_used,
             "skill_hierarchy_enabled": self.config.use_skill_hierarchy,
             "demonstration_levels_enabled": self.config.use_demonstration_levels,
@@ -183,7 +235,7 @@ class ScoringService:
             "keyword_stuffing_education_aware": self.config.keyword_stuffing_education_aware,
             "related_skill_credit_threshold": self.config.related_skill_credit_threshold,
         }
-        
+
         # Add active components
         if required_coverage > 0:
             scoring_strategy["components"].append("required_skills")
@@ -201,7 +253,7 @@ class ScoringService:
             scoring_strategy["components"].append("demonstration_levels")
         if keyword_stuffing_penalty > 0:
             scoring_strategy["components"].append("keyword_stuffing_penalty")
-        
+
         # Generate explanation
         explanation = self._generate_explanation(
             overall_score,
@@ -209,15 +261,63 @@ class ScoringService:
             preferred_coverage,
             evidence_score,
             semantic_score,
-            required_match,
+            required_match.get("required_units", []),
+            semantic_status,
+            effective_weights,
         )
-        
+
+        # Map evidence to requirements using the same canonical units as scoring.
+        required_display_skills = self._unit_skill_names(
+            required_match.get("required_units", [])
+        )
+        requirement_credits = {
+            **(preferred_match.get("requirement_credits") or {}),
+            **(required_match.get("requirement_credits") or {}),
+        }
+        requirement_evaluations = self.evidence_mapping_service.map_evidence_to_requirements(
+            required_display_skills,
+            preferred_scoring_skills,
+            required_match,
+            skill_evidence,
+            required_match.get("group_evaluation", []),
+            requirement_credits,
+        )
+
+        # Generate evidence summary
+        evidence_summary = self.evidence_mapping_service.generate_evidence_summary(
+            requirement_evaluations,
+        )
+
+        # Generate strengths and gaps
+        strengths_gaps = self.evidence_mapping_service.generate_strengths_and_gaps(
+            requirement_evaluations,
+        )
+
         # Convert evidence to dict format
         skill_evidence_dict = {
             skill: [ev.to_dict() for ev in ev_list]
             for skill, ev_list in skill_evidence.items()
         }
-        
+
+        # Convert requirement evaluations to dict format
+        requirement_evaluations_dict = {
+            skill: {
+                "skill": eval.skill,
+                "requirement_type": eval.requirement_type,
+                "matched": eval.matched,
+                "match_type": eval.match_type.value if eval.match_type else None,
+                "match_credit": eval.match_credit,
+                "evidence_level": eval.evidence_level,
+                "source_section": eval.source_section,
+                "evidence": eval.evidence,
+                "source_reference": eval.source_reference,
+                "experience_type": eval.experience_type,
+                "project_info": eval.project_info,
+                "satisfied_by_group": eval.satisfied_by_group,
+            }
+            for skill, eval in requirement_evaluations.items()
+        }
+
         return {
             "overall_score": overall_score,
             "required_skill_coverage": required_coverage,
@@ -239,100 +339,222 @@ class ScoringService:
                 "total_skills": keyword_stuffing_analysis.total_skills if keyword_stuffing_analysis else 0,
                 "skills_without_evidence": keyword_stuffing_analysis.skills_without_evidence if keyword_stuffing_analysis else 0,
             } if keyword_stuffing_analysis else None,
+            "evidence_summary": evidence_summary,
+            "requirement_evaluations": requirement_evaluations_dict,
+            "strengths": strengths_gaps["strengths"],
+            "gaps": strengths_gaps["gaps"],
+            "group_evaluation": required_match.get("group_evaluation", []),  # Phase 10.2: Group evaluation details
         }
-    
+
+    def _configured_weights(self) -> Dict[str, float]:
+        return {
+            "required_skills": self.config.required_skill_weight,
+            "preferred_skills": self.config.preferred_skill_weight,
+            "semantic": self.config.semantic_weight,
+            "evidence": self.config.evidence_weight,
+            "tfidf": self.config.tfidf_weight,
+        }
+
+    def _effective_weights(self, semantic_used: bool) -> Dict[str, float]:
+        """Return configured or renormalized weights for the active path."""
+        configured = self._configured_weights()
+        if semantic_used:
+            return dict(configured)
+
+        renormalizable = {
+            "required_skills": self.config.required_skill_weight,
+            "preferred_skills": self.config.preferred_skill_weight,
+            "evidence": self.config.evidence_weight,
+            "tfidf": self.config.tfidf_weight,
+        }
+        denominator = sum(renormalizable.values())
+        if denominator <= 0:
+            return dict(configured)
+
+        return {
+            "required_skills": configured["required_skills"] / denominator,
+            "preferred_skills": configured["preferred_skills"] / denominator,
+            "semantic": 0.0,
+            "evidence": configured["evidence"] / denominator,
+            "tfidf": configured["tfidf"] / denominator,
+        }
+
+    def _unit_skill_names(self, units: List[Dict[str, Any]]) -> List[str]:
+        names: List[str] = []
+        seen = set()
+        for unit in units:
+            for skill in unit.get("skills", []):
+                key = skill.lower()
+                if key not in seen:
+                    seen.add(key)
+                    names.append(skill)
+        return names
+
     def _calculate_evidence_score(
         self,
-        matched_skills: List[str],
+        required_units: List[Dict[str, Any]],
         skill_evidence: Dict[str, List],
         use_demonstration_levels: bool = True,
     ) -> float:
         """
-        Calculate evidence strength score with demonstration level weighting.
-        
-        Args:
-            matched_skills: List of matched skills.
-            skill_evidence: Evidence dictionary.
-            use_demonstration_levels: Whether to apply demonstration level weighting.
-            
-        Returns:
-            Evidence score (0-100).
+        Calculate evidence strength over eligible required scoring units only.
+
+        Individual, ANY, and ALL units each contribute at most one bounded
+        value. Actual hierarchy credit scales every contribution.
         """
-        if not matched_skills:
+        if not required_units:
             return 0.0
-        
-        total_strength = 0.0
-        
-        # Base strength values
+
         strength_values = {
             EvidenceStrength.STRONG: 100.0,
             EvidenceStrength.MODERATE: 75.0,
             EvidenceStrength.BASIC: 50.0,
             EvidenceStrength.WEAK: 25.0,
         }
-        
-        # Demonstration level multipliers (only used if enabled)
         demonstration_multipliers = {
-            DemonstrationLevel.MEASURABLE: 1.2,  # 20% boost for measurable outcomes
-            DemonstrationLevel.IMPLEMENTED: 1.1,  # 10% boost for implementation
-            DemonstrationLevel.MENTIONED: 1.0,  # No change for mentioned
-            DemonstrationLevel.CLAIMED: 0.8,  # 20% penalty for claimed only
-            None: 1.0,  # No demonstration level info
+            DemonstrationLevel.MEASURABLE: 1.2,
+            DemonstrationLevel.IMPLEMENTED: 1.1,
+            DemonstrationLevel.MENTIONED: 1.0,
+            DemonstrationLevel.CLAIMED: 0.8,
+            None: 1.0,
         }
-        
-        for skill in matched_skills:
-            if skill in skill_evidence and skill_evidence[skill]:
-                # Get best evidence for this skill
-                best_evidence = self.evidence_service.get_best_evidence(skill_evidence[skill])
-                if best_evidence:
-                    base_strength = strength_values.get(best_evidence.strength, 50.0)
-                    if use_demonstration_levels:
-                        demo_multiplier = demonstration_multipliers.get(best_evidence.demonstration_level, 1.0)
-                        total_strength += base_strength * demo_multiplier
-                    else:
-                        total_strength += base_strength
-                else:
-                    total_strength += 50.0  # Default if evidence exists but no best
-            else:
-                # Skill matched but no evidence found
-                total_strength += 25.0
-        
-        # Normalize to 0-100 range
-        evidence_score = total_strength / len(matched_skills)
-        return min(evidence_score, 100.0)
-    
+
+        def raw_strength(skill: Optional[str]) -> float:
+            if not skill:
+                return 25.0
+            evidence_list = skill_evidence.get(skill) or []
+            if not evidence_list:
+                return 25.0
+            best_evidence = self.evidence_service.get_best_evidence(evidence_list)
+            if not best_evidence:
+                return 50.0
+            base_strength = strength_values.get(best_evidence.strength, 50.0)
+            if use_demonstration_levels:
+                multiplier = demonstration_multipliers.get(
+                    best_evidence.demonstration_level, 1.0
+                )
+                return base_strength * multiplier
+            return base_strength
+
+        total_strength = 0.0
+        denominator = 0
+
+        for unit in required_units:
+            kind = unit.get("kind")
+            skills = unit.get("skills", [])
+            member_credits = unit.get("member_credits", [])
+            member_evidence_skills = unit.get("member_evidence_skills", [])
+
+            if kind == "individual":
+                credit = float(unit.get("credit", 0.0))
+                if credit <= 0.0:
+                    continue
+                evidence_skill = unit.get("evidence_skill") or skills[0]
+                total_strength += credit * raw_strength(evidence_skill)
+                denominator += 1
+                continue
+
+            if kind == "any":
+                group_credit = max(member_credits, default=0.0)
+                if group_credit <= 0.0:
+                    continue
+                eligible = [
+                    (index, credit)
+                    for index, credit in enumerate(member_credits)
+                    if credit > 0.0
+                ]
+                representative_index, _ = max(
+                    eligible,
+                    key=lambda item: (
+                        item[1],
+                        raw_strength(
+                            member_evidence_skills[item[0]]
+                            if item[0] < len(member_evidence_skills)
+                            else skills[item[0]]
+                        ),
+                        -item[0],
+                    ),
+                )
+                evidence_skill = (
+                    member_evidence_skills[representative_index]
+                    if representative_index < len(member_evidence_skills)
+                    else skills[representative_index]
+                )
+                total_strength += group_credit * raw_strength(evidence_skill)
+                denominator += 1
+                continue
+
+            if kind == "all" and skills:
+                if not any(credit > 0.0 for credit in member_credits):
+                    continue
+                group_sum = 0.0
+                for index, credit in enumerate(member_credits):
+                    evidence_skill = (
+                        member_evidence_skills[index]
+                        if index < len(member_evidence_skills)
+                        else skills[index]
+                    )
+                    group_sum += credit * raw_strength(evidence_skill)
+                total_strength += group_sum / len(skills)
+                denominator += 1
+
+        if denominator == 0:
+            return 0.0
+        return min(total_strength / denominator, 100.0)
+
     def _calculate_semantic_score(
         self,
         job_text: str,
         resume_text: str,
-        required_skills: List[str],
-        skill_evidence: Dict[str, List],
-    ) -> float:
+        structured_requirements: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[Optional[float], Optional[Dict[str, str]], Optional[Dict[str, Any]]]:
+        """Calculate the semantic scalar, preserving failure as ``None``.
+
+        The requirement-to-chunk path is used when the injected semantic
+        service exposes the tokenizer/matrix API. Older services and test
+        doubles retain the legacy document-level path so Phase 11.3
+        compatibility is preserved.
         """
-        Calculate semantic similarity score.
-        
-        Args:
-            job_text: Job description text.
-            resume_text: Resume text.
-            required_skills: Required skills.
-            skill_evidence: Skill evidence dictionary.
-            
-        Returns:
-            Semantic score (0-100).
-        """
+        has_requirement_api = all(
+            callable(getattr(self.semantic_service, method, None))
+            for method in ("get_model_context", "compute_similarity_matrix")
+        )
+
         try:
-            # Overall document similarity
+            if has_requirement_api:
+                model_context = self.semantic_service.get_model_context()
+                inputs = build_semantic_inputs(
+                    job_text,
+                    resume_text,
+                    structured_requirements,
+                    model_context["tokenizer"],
+                    model_context["max_seq_length"],
+                )
+                result = RequirementSemanticService().score(
+                    inputs, self.semantic_service
+                )
+                return float(result.score), None, result.details
+
             doc_similarity = self.semantic_service.compute_similarity(job_text, resume_text)
-            
             if doc_similarity is None:
-                return 0.0
-            
-            # Convert to percentage
-            return doc_similarity * 100.0
+                return None, {
+                    "error_type": "inference_failure",
+                    "message": "Semantic similarity computation returned no score.",
+                }, None
+            return doc_similarity * 100.0, None, None
+        except SemanticError as e:
+            logger.error(f"Semantic context computation failed: {e}")
+            return None, {
+                "error_type": e.error_type.value,
+                "message": e.message,
+            }, None
         except Exception as e:
             logger.error(f"Semantic score calculation failed: {e}")
-            return 0.0
-    
+            return None, {
+                "error_type": "inference_failure",
+                "message": str(e),
+            }, None
+
     def _compute_overall_score(
         self,
         required_coverage: float,
@@ -340,42 +562,26 @@ class ScoringService:
         evidence_score: float,
         semantic_score: Optional[float],
         tfidf_score: float,
+        weights: Dict[str, float],
     ) -> float:
-        """
-        Compute overall match score.
-        
-        Args:
-            required_coverage: Required skill coverage percentage.
-            preferred_coverage: Preferred skill coverage percentage.
-            evidence_score: Evidence strength score.
-            semantic_score: Semantic similarity score (0-100).
-            tfidf_score: TF-IDF similarity score (0-100).
-            
-        Returns:
-            Overall score (0-100).
-        """
-        # Normalize scores to 0-1 range
+        """Compute the weighted score using the supplied effective weights."""
         required_norm = required_coverage / 100.0
         preferred_norm = preferred_coverage / 100.0
         evidence_norm = evidence_score / 100.0
         semantic_norm = (semantic_score / 100.0) if semantic_score is not None else 0.0
         tfidf_norm = tfidf_score / 100.0
-        
-        # Calculate weighted score
+
         weighted_score = (
-            (self.config.required_skill_weight * required_norm) +
-            (self.config.preferred_skill_weight * preferred_norm) +
-            (self.config.evidence_weight * evidence_norm) +
-            (self.config.semantic_weight * semantic_norm) +
-            (self.config.tfidf_weight * tfidf_norm)
+            weights.get("required_skills", 0.0) * required_norm
+            + weights.get("preferred_skills", 0.0) * preferred_norm
+            + weights.get("evidence", 0.0) * evidence_norm
+            + weights.get("semantic", 0.0) * semantic_norm
+            + weights.get("tfidf", 0.0) * tfidf_norm
         )
-        
-        # Convert back to percentage
+
         overall = weighted_score * 100.0
-        
-        # Clamp to 0-100
         return max(0.0, min(100.0, overall))
-    
+
     def _generate_explanation(
         self,
         overall_score: float,
@@ -383,53 +589,64 @@ class ScoringService:
         preferred_coverage: float,
         evidence_score: float,
         semantic_score: Optional[float],
-        skill_match: Dict[str, Any],
+        required_units: List[Dict[str, Any]],
+        semantic_status: str,
+        effective_weights: Dict[str, float],
     ) -> str:
-        """
-        Generate explanation for the match score.
-        
-        Args:
-            overall_score: Overall match score.
-            required_coverage: Required skill coverage.
-            preferred_coverage: Preferred skill coverage.
-            evidence_score: Evidence strength score.
-            semantic_score: Semantic similarity score.
-            skill_match: Skill match result.
-            
-        Returns:
-            Explanation text.
-        """
+        """Generate explanation consistent with canonical scoring units."""
         parts = []
-        
-        # Overall assessment
+
         if overall_score >= 80:
             parts.append("The candidate demonstrates strong alignment with the job requirements.")
         elif overall_score >= 60:
             parts.append("The candidate shows moderate alignment with the job requirements.")
         else:
             parts.append("The candidate has limited alignment with the job requirements.")
-        
-        # Skill coverage
-        parts.append(
-            f"They satisfy {len(skill_match['matched'])} of {len(skill_match['matched']) + len(skill_match['missing'])} "
-            f"required skills ({required_coverage:.1f}% coverage)."
-        )
-        
-        # Preferred skills
+
+        if required_units:
+            fully_matched_units = sum(
+                1 for unit in required_units if float(unit.get("credit", 0.0)) >= 1.0
+            )
+            partially_matched_units = sum(
+                1
+                for unit in required_units
+                if 0.0 < float(unit.get("credit", 0.0)) < 1.0
+            )
+            parts.append(
+                f"They fully matched {fully_matched_units} of {len(required_units)} required requirement units "
+                f"and partially matched {partially_matched_units} "
+                f"({required_coverage:.1f}% weighted coverage)."
+            )
+            partially_matched_all_groups = sum(
+                1
+                for unit in required_units
+                if unit.get("match_mode") == "ALL"
+                and 0.0 < float(unit.get("credit", 0.0)) < 1.0
+            )
+            if partially_matched_all_groups:
+                parts.append(
+                    f"{partially_matched_all_groups} ALL requirement group(s) were partially matched; "
+                    "they were not counted as fully matched."
+                )
+            elif partially_matched_units:
+                parts.append(
+                    f"{partially_matched_units} required requirement(s) received partial credit from related skills."
+                )
+        else:
+            parts.append("No required requirement units were declared.")
+
         if preferred_coverage > 0:
             parts.append(
                 f"They also cover {preferred_coverage:.1f}% of preferred skills."
             )
-        
-        # Evidence quality
+
         if evidence_score >= 75:
             parts.append("Skills are well-demonstrated with strong supporting evidence.")
         elif evidence_score >= 50:
             parts.append("Skills have moderate supporting evidence.")
         else:
             parts.append("Skills have limited supporting evidence.")
-        
-        # Semantic similarity
+
         if semantic_score is not None:
             if semantic_score >= 70:
                 parts.append("The resume shows strong semantic relevance to the job description.")
@@ -437,12 +654,13 @@ class ScoringService:
                 parts.append("The resume shows moderate semantic relevance to the job description.")
             else:
                 parts.append("The resume has limited semantic relevance to the job description.")
-        
-        # Missing skills
-        if skill_match["missing"]:
-            missing_preview = ", ".join(skill_match["missing"][:3])
-            if len(skill_match["missing"]) > 3:
-                missing_preview += f" (+{len(skill_match['missing']) - 3} more)"
-            parts.append(f"Notable gaps include: {missing_preview}.")
-        
+        else:
+            parts.append(
+                "Semantic matching was not applied ("
+                + semantic_status
+                + f"); effective weights were required {effective_weights.get('required_skills', 0.0):.3f}, "
+                + f"preferred {effective_weights.get('preferred_skills', 0.0):.3f}, "
+                + f"evidence {effective_weights.get('evidence', 0.0):.3f}."
+            )
+
         return " ".join(parts)

@@ -3,8 +3,7 @@ Evaluation metrics for ranking assessment.
 Implements precision@K, recall@K, NDCG@K, MRR, and skill extraction metrics.
 """
 import math
-from typing import List, Dict, Any, Optional
-from collections import defaultdict
+from typing import List, Dict, Any
 
 
 class RankingMetrics:

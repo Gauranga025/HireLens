@@ -2,7 +2,7 @@
 
 import { Award, AlertTriangle, Plus, FileText, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { useState } from 'react';
-import type { CandidateMatchResult, SkillEvidence } from '@/lib/types';
+import type { CandidateMatchResult } from '@/lib/types';
 
 interface CandidateAnalysisProps {
   candidate: CandidateMatchResult;
@@ -11,6 +11,9 @@ interface CandidateAnalysisProps {
 export function CandidateAnalysis({ candidate }: CandidateAnalysisProps) {
   const { match_result } = candidate;
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(new Set());
+  const groupEvaluation = match_result.group_evaluation ?? [];
+  const strengths = match_result.strengths ?? [];
+  const gaps = match_result.gaps ?? [];
 
   const toggleSkill = (skill: string) => {
     const newExpanded = new Set(expandedSkills);
@@ -88,10 +91,54 @@ export function CandidateAnalysis({ candidate }: CandidateAnalysisProps) {
           )}
           <div className="p-3 bg-muted/50 border border-border rounded-md">
             <p className="text-xs text-muted-foreground mb-1">Evidence</p>
-            <p className="text-lg font-semibold">{Object.keys(match_result.skill_evidence).length > 0 ? 'Yes' : 'N/A'}</p>
+            <p className="text-lg font-semibold">
+              {match_result.evidence_score != null
+                ? `${match_result.evidence_score.toFixed(1)}%`
+                : Object.keys(match_result.skill_evidence).length > 0
+                  ? 'Available'
+                  : 'N/A'}
+            </p>
           </div>
         </div>
       </div>
+
+      {/* Alternative requirement groups */}
+      {groupEvaluation.length > 0 && (
+        <div>
+          <h3 className="font-medium mb-3 flex items-center gap-2">
+            <Award className="h-4 w-4" />
+            Alternative Requirements
+          </h3>
+          <div className="space-y-2">
+            {groupEvaluation.map((group, index) => (
+              <div
+                key={`${group.group_name}-${index}`}
+                className="p-3 border border-border rounded-md"
+              >
+                <div className="flex items-center justify-between gap-3 mb-2">
+                  <span className="text-sm font-medium">{group.group_name}</span>
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded-full ${
+                      group.is_satisfied
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                        : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                    }`}
+                  >
+                    {group.is_satisfied ? 'Satisfied' : 'Not satisfied'}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {group.match_mode === 'ANY' ? 'Requires at least one of' : 'Requires all of'}:{' '}
+                  {group.required_skills.join(', ')}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Matched: {group.matched_skills.length > 0 ? group.matched_skills.join(', ') : 'None'}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Matched Skills with Evidence */}
       <div>
@@ -137,10 +184,27 @@ export function CandidateAnalysis({ candidate }: CandidateAnalysisProps) {
                             <span className={`text-xs px-2 py-0.5 rounded-full ${getEvidenceColor(ev.strength)}`}>
                               {ev.strength}
                             </span>
+                            {ev.demonstration_level && (
+                              <span className="text-xs text-muted-foreground">
+                                {ev.demonstration_level}
+                              </span>
+                            )}
                           </div>
                           <p className="text-sm text-muted-foreground italic">
-                            "{ev.snippet}"
+                            &quot;{ev.snippet}&quot;
                           </p>
+                          {ev.experience_type && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                              Context: {ev.experience_type.replace(/_/g, ' ')}
+                            </p>
+                          )}
+                          {!ev.experience_type &&
+                            ev.project_info &&
+                            typeof ev.project_info.title === 'string' && (
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Project: {ev.project_info.title}
+                              </p>
+                            )}
                         </div>
                       ))}
                     </div>
@@ -161,6 +225,52 @@ export function CandidateAnalysis({ candidate }: CandidateAnalysisProps) {
           )}
         </div>
       </div>
+
+      {/* Strengths and gaps */}
+      {(strengths.length > 0 || gaps.length > 0) && (
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <h3 className="font-medium mb-3 flex items-center gap-2 text-green-600">
+              <Award className="h-4 w-4" />
+              Strengths ({strengths.length})
+            </h3>
+            <ul className="space-y-2">
+              {strengths.length > 0 ? (
+                strengths.map((strength, index) => (
+                  <li
+                    key={index}
+                    className="p-2 text-sm bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-900/40 rounded-md"
+                  >
+                    {strength}
+                  </li>
+                ))
+              ) : (
+                <li className="text-sm text-muted-foreground">No demonstrated strengths identified.</li>
+              )}
+            </ul>
+          </div>
+          <div>
+            <h3 className="font-medium mb-3 flex items-center gap-2 text-yellow-600">
+              <AlertTriangle className="h-4 w-4" />
+              Gaps ({gaps.length})
+            </h3>
+            <ul className="space-y-2">
+              {gaps.length > 0 ? (
+                gaps.map((gap, index) => (
+                  <li
+                    key={index}
+                    className="p-2 text-sm bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-900/40 rounded-md"
+                  >
+                    {gap}
+                  </li>
+                ))
+              ) : (
+                <li className="text-sm text-muted-foreground">No evidence gaps identified.</li>
+              )}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* Missing Skills */}
       <div>

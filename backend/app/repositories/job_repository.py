@@ -5,6 +5,21 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import Job
+from app.utils.serialization import serialize_for_jsonb
+
+
+def get_structured_requirements(job: Job) -> List[Dict]:
+    """Return Phase 10 requirements with a legacy fallback.
+
+    The dedicated column is authoritative when populated. Rows created before
+    the column existed have an empty list (the column is NOT NULL with a
+    server default), so fall back to the requirements stored inside
+    ``analysis_data`` for those jobs.
+    """
+    if job.structured_requirements:
+        return job.structured_requirements
+    analysis = job.analysis_data or {}
+    return analysis.get("structured_requirements") or []
 
 
 class JobRepository:
@@ -19,7 +34,8 @@ class JobRepository:
         preferred_skills: List[str],
         qualifications: List[str],
         experience_required: str,
-        analysis_data: Dict,
+        structured_requirements: Optional[List[Dict]] = None,
+        analysis_data: Optional[Dict] = None,
     ) -> Job:
         """Create a new job record.
         
@@ -31,19 +47,24 @@ class JobRepository:
             preferred_skills: Preferred skills list.
             qualifications: Qualifications list.
             experience_required: Experience requirement text.
+            structured_requirements: Structured requirements list.
             analysis_data: Full analysis data from job_analysis_service.
         
         Returns:
             Created Job instance.
         """
+        # JSONB values must contain only JSON-compatible primitives. Normalize
+        # here so every caller (routes, scripts, tests) is protected from
+        # accidentally sending Pydantic models or enum members to PostgreSQL.
         job = Job(
             title=title,
             description=description,
-            required_skills=required_skills,
-            preferred_skills=preferred_skills,
-            qualifications=qualifications,
+            required_skills=serialize_for_jsonb(required_skills or []),
+            preferred_skills=serialize_for_jsonb(preferred_skills or []),
+            qualifications=serialize_for_jsonb(qualifications or []),
             experience_required=experience_required,
-            analysis_data=analysis_data,
+            structured_requirements=serialize_for_jsonb(structured_requirements or []),
+            analysis_data=serialize_for_jsonb(analysis_data or {}),
         )
         
         db.add(job)

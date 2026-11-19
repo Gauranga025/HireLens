@@ -3,7 +3,12 @@ Semantic matching service using sentence-transformers.
 Provides requirement-level semantic similarity matching.
 """
 import functools
+import hashlib
 import logging
+import os
+import re
+import threading
+from collections import OrderedDict
 from typing import Optional, List, Dict, Tuple, Any
 from enum import Enum
 
@@ -11,6 +16,15 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 logger = logging.getLogger(__name__)
+
+REQUIREMENT_EMBEDDING_CACHE_SIZE = 256
+CHUNK_EMBEDDING_CACHE_SIZE = 2048
+
+DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+# Verified against the local Hugging Face cache on 2026-11-19. The unpinned and
+# explicitly pinned snapshots expose identical config, tokenizer, weights, and
+# embeddings; see the root README.
+VERIFIED_MODEL_REVISION = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
 
 
 class SemanticErrorType(Enum):
@@ -35,17 +49,55 @@ class SemanticError(Exception):
 class SemanticMatchingService:
     """Service for semantic similarity matching using sentence-transformers."""
     
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        revision: Optional[str] = None,
+    ):
         """
         Initialize the semantic matching service.
-        
+
         Args:
-            model_name: Name of the sentence-transformers model to use.
+            model_name: Model repository name. Defaults to the verified
+                Sentence Transformers model, overridable with
+                ``SEMANTIC_MODEL_NAME``.
+            revision: Exact model revision. Defaults to the verified pinned
+                snapshot for the standard model, overridable with
+                ``SEMANTIC_MODEL_REVISION``. Custom models use ``main`` unless
+                an explicit revision is supplied.
         """
-        self.model_name = model_name
+        self.model_name = model_name or os.getenv(
+            "SEMANTIC_MODEL_NAME", DEFAULT_MODEL_NAME
+        )
+        if revision is not None:
+            self.model_revision = revision
+        else:
+            env_revision = os.getenv("SEMANTIC_MODEL_REVISION")
+            self.model_revision = (
+                env_revision
+                or (
+                    VERIFIED_MODEL_REVISION
+                    if self.model_name == DEFAULT_MODEL_NAME
+                    else "main"
+                )
+            )
         self._model = None
         self._load_attempted = False
         self._load_error: Optional[SemanticError] = None
+        self._model_revision: str = self.model_revision
+        self._cache_lock = threading.RLock()
+        self._embedding_caches: Dict[str, OrderedDict] = {
+            "requirement": OrderedDict(),
+            "chunk": OrderedDict(),
+        }
+        self._cache_limits: Dict[str, int] = {
+            "requirement": REQUIREMENT_EMBEDDING_CACHE_SIZE,
+            "chunk": CHUNK_EMBEDDING_CACHE_SIZE,
+        }
+        self._cache_stats: Dict[str, Dict[str, int]] = {
+            "requirement": {"hits": 0, "misses": 0, "evictions": 0},
+            "chunk": {"hits": 0, "misses": 0, "evictions": 0},
+        }
     
     @functools.lru_cache(maxsize=1)
     def _load_model(self) -> None:
@@ -90,13 +142,30 @@ class SemanticMatchingService:
             raise error
         
         try:
-            logger.info(f"Loading semantic model: {self.model_name}")
-            self._model = SentenceTransformer(self.model_name)
+            logger.info(
+                "Loading semantic model %s at revision %s",
+                self.model_name,
+                self.model_revision,
+            )
+            self._model = SentenceTransformer(
+                self.model_name,
+                revision=self.model_revision,
+            )
             logger.info("Semantic model loaded successfully")
+        except OSError as e:
+            error = SemanticError(
+                SemanticErrorType.MODEL_DOWNLOAD_FAILURE,
+                f"Failed to download or cache model {self.model_name} "
+                f"at revision {self.model_revision}: {e}"
+            )
+            self._load_error = error
+            logger.error(f"Failed to download semantic model: {e}")
+            raise error
         except Exception as e:
             error = SemanticError(
                 SemanticErrorType.MODEL_LOADING_FAILURE,
-                f"Failed to load model {self.model_name}: {e}"
+                f"Failed to load model {self.model_name} "
+                f"at revision {self.model_revision}: {e}"
             )
             self._load_error = error
             logger.error(f"Failed to load semantic model: {e}")
@@ -130,7 +199,196 @@ class SemanticMatchingService:
                 "message": self._load_error.message
             }
         return None
-    
+
+    def _revision_from_model(self) -> str:
+        """Return the loaded model's revision, or the configured fallback."""
+        model = self._model
+        if model is not None:
+            for attribute in ("_model_revision", "model_revision", "revision"):
+                value = getattr(model, attribute, None)
+                if value:
+                    return str(value)
+
+            configs = [getattr(model, "config", None)]
+            first_module_factory = getattr(model, "_first_module", None)
+            if callable(first_module_factory):
+                try:
+                    first_module = first_module_factory()
+                except Exception:
+                    first_module = None
+                auto_model = getattr(first_module, "auto_model", None)
+                configs.append(getattr(auto_model, "config", None))
+
+            for config in configs:
+                for attribute in ("_commit_hash", "commit_hash"):
+                    value = getattr(config, attribute, None) if config is not None else None
+                    if value:
+                        return str(value)
+        return self.model_revision or "unpinned"
+
+    def get_model_context(self) -> Dict[str, Any]:
+        """Expose the loaded model's tokenizer and verified maximum length."""
+        self._load_model()
+        model = self._model
+        if model is None:
+            raise SemanticError(
+                SemanticErrorType.INFERENCE_FAILURE,
+                "Semantic model is not available for token verification.",
+            )
+
+        tokenizer = getattr(model, "tokenizer", None)
+        if tokenizer is None:
+            first_module = getattr(model, "_first_module", None)
+            if callable(first_module):
+                module = first_module()
+                tokenizer = getattr(module, "tokenizer", None)
+        if tokenizer is None:
+            raise SemanticError(
+                SemanticErrorType.MODEL_LOADING_FAILURE,
+                "The semantic model did not expose a tokenizer.",
+            )
+
+        max_length_candidates: List[int] = []
+        for value in (
+            getattr(model, "max_seq_length", None),
+            getattr(tokenizer, "model_max_length", None),
+        ):
+            try:
+                numeric = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 < numeric < 1_000_000:
+                max_length_candidates.append(numeric)
+        if not max_length_candidates:
+            raise SemanticError(
+                SemanticErrorType.MODEL_LOADING_FAILURE,
+                "The semantic model did not expose a usable maximum sequence length.",
+            )
+
+        revision = self._revision_from_model()
+        self._model_revision = revision
+        return {
+            "tokenizer": tokenizer,
+            "max_seq_length": min(max_length_candidates),
+            "model_name": self.model_name,
+            "model_revision": revision,
+        }
+
+    @staticmethod
+    def _normalized_text_hash(text: str) -> str:
+        normalized = re.sub(r"\s+", " ", text or "").strip().casefold()
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _embedding_cache_key(self, text: str) -> Tuple[str, str, str]:
+        return (self.model_name, self._revision_from_model(), self._normalized_text_hash(text))
+
+    def compute_embeddings_cached(
+        self,
+        texts: List[str],
+        cache_kind: str,
+    ) -> List[Optional[np.ndarray]]:
+        """Embed unique texts once per bounded LRU cache."""
+        if cache_kind not in self._embedding_caches:
+            raise SemanticError(
+                SemanticErrorType.INFERENCE_FAILURE,
+                f"Unknown embedding cache kind: {cache_kind}",
+            )
+        # The cache key includes model revision information that may only be
+        # available after the lazy model load, so load before deriving keys.
+        self._load_model()
+        cache = self._embedding_caches[cache_kind]
+        results: List[Optional[np.ndarray]] = [None] * len(texts)
+        unique_missing: List[str] = []
+        missing_positions_by_key: Dict[Tuple[str, str, str], List[int]] = {}
+
+        with self._cache_lock:
+            for position, text in enumerate(texts):
+                if not text or not text.strip():
+                    raise SemanticError(
+                        SemanticErrorType.INFERENCE_FAILURE,
+                        "Refusing to embed empty text.",
+                    )
+                key = self._embedding_cache_key(text)
+                if key in cache:
+                    cache.move_to_end(key)
+                    results[position] = cache[key]
+                    self._cache_stats[cache_kind]["hits"] += 1
+                elif key in missing_positions_by_key:
+                    # A duplicate inside this batch counts as a hit and reuses
+                    # the same embedding object as its first occurrence.
+                    missing_positions_by_key[key].append(position)
+                    self._cache_stats[cache_kind]["hits"] += 1
+                else:
+                    self._cache_stats[cache_kind]["misses"] += 1
+                    missing_positions_by_key[key] = [position]
+                    unique_missing.append(text)
+
+        if unique_missing:
+            computed = self.compute_embeddings(unique_missing)
+            if len(computed) != len(unique_missing) or any(
+                embedding is None for embedding in computed
+            ):
+                raise SemanticError(
+                    SemanticErrorType.INFERENCE_FAILURE,
+                    "Batch embedding computation returned no embedding for a text.",
+                )
+            with self._cache_lock:
+                limit = self._cache_limits[cache_kind]
+                for text, embedding in zip(unique_missing, computed):
+                    key = self._embedding_cache_key(text)
+                    cache[key] = embedding
+                    cache.move_to_end(key)
+                    while len(cache) > limit:
+                        cache.popitem(last=False)
+                        self._cache_stats[cache_kind]["evictions"] += 1
+            for text, embedding in zip(unique_missing, computed):
+                key = self._embedding_cache_key(text)
+                for position in missing_positions_by_key[key]:
+                    results[position] = embedding
+
+        return results
+
+    def compute_similarity_matrix(
+        self,
+        query_texts: List[str],
+        chunk_texts: List[str],
+    ) -> Optional[np.ndarray]:
+        """Compute a clipped cosine matrix from batched, cached embeddings."""
+        if not query_texts or not chunk_texts:
+            return np.zeros((len(query_texts), len(chunk_texts)), dtype=float)
+        try:
+            query_embeddings = self.compute_embeddings_cached(
+                list(query_texts), "requirement"
+            )
+            chunk_embeddings = self.compute_embeddings_cached(
+                list(chunk_texts), "chunk"
+            )
+            query_matrix = np.vstack(query_embeddings)
+            chunk_matrix = np.vstack(chunk_embeddings)
+            similarities = cosine_similarity(query_matrix, chunk_matrix)
+            return np.clip(similarities, 0.0, 1.0)
+        except SemanticError:
+            return None
+        except Exception as exc:
+            logger.error(f"Similarity matrix computation failed: {exc}")
+            return None
+
+    def get_cache_stats(self) -> Dict[str, Dict[str, int]]:
+        """Return a snapshot of bounded embedding-cache counters."""
+        with self._cache_lock:
+            return {
+                kind: dict(stats) | {"size": len(self._embedding_caches[kind])}
+                for kind, stats in self._cache_stats.items()
+            }
+
+    def clear_embedding_caches(self) -> None:
+        """Clear cached embeddings and counters (diagnostic/testing helper)."""
+        with self._cache_lock:
+            for cache in self._embedding_caches.values():
+                cache.clear()
+            for stats in self._cache_stats.values():
+                stats.update({"hits": 0, "misses": 0, "evictions": 0})
+
     def compute_embedding(self, text: str) -> Optional[np.ndarray]:
         """
         Compute embedding for a single text.

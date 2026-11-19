@@ -1,5 +1,5 @@
 """Serialization utilities for converting Pydantic models to JSON-compatible structures."""
-from typing import Any, Dict, List, Union
+from typing import Any
 from uuid import UUID
 from datetime import datetime, date
 from enum import Enum
@@ -18,21 +18,26 @@ def serialize_for_jsonb(value: Any) -> Any:
     if value is None:
         return None
     
-    # Handle Pydantic models (v2)
+    # Handle enums before primitives because str-valued enums are also strings
+    if isinstance(value, Enum):
+        return value.value
+
+    # Handle Pydantic models (v2). json mode recursively serializes nested
+    # models, enums, datetimes, UUIDs, and other JSON-incompatible values.
     if hasattr(value, 'model_dump'):
-        return value.model_dump(mode='json')
+        return serialize_for_jsonb(value.model_dump(mode='json'))
     
     # Handle dataclasses
     if hasattr(value, '__dataclass_fields__'):
         import dataclasses
-        return dataclasses.asdict(value)
+        return serialize_for_jsonb(dataclasses.asdict(value))
     
     # Handle dictionaries recursively
     if isinstance(value, dict):
         return {k: serialize_for_jsonb(v) for k, v in value.items()}
     
     # Handle lists recursively
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, set)):
         return [serialize_for_jsonb(item) for item in value]
     
     # Handle UUID
@@ -42,10 +47,6 @@ def serialize_for_jsonb(value: Any) -> Any:
     # Handle datetime and date
     if isinstance(value, (datetime, date)):
         return value.isoformat()
-    
-    # Handle enums
-    if isinstance(value, Enum):
-        return value.value
     
     # Handle primitive types (str, int, float, bool) - return as-is
     if isinstance(value, (str, int, float, bool)):

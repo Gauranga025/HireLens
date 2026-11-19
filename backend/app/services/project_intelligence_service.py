@@ -3,7 +3,7 @@ Project Intelligence Service
 Evaluates project complexity, relevance, and outcomes.
 """
 import re
-from typing import Dict, List, Optional
+from typing import List
 from dataclasses import dataclass
 
 from app.services.experience_classification_service import ExperienceEntry, ExperienceType

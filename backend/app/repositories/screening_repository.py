@@ -83,6 +83,39 @@ class ScreeningRepository:
         
         return screening
     
+    async def upsert(
+        self,
+        db: AsyncSession,
+        **fields,
+    ) -> ScreeningResult:
+        """Create or update a screening result for a job/resume pair.
+
+        The database enforces a unique constraint on (job_id, resume_id), so
+        repeated evaluations must update the existing row instead of inserting
+        a duplicate. Any omitted fields keep the repository defaults on insert
+        and are left unchanged on update.
+        """
+        job_id = fields.get("job_id")
+        resume_id = fields.get("resume_id")
+        if job_id is None or resume_id is None:
+            raise ValueError("job_id and resume_id are required")
+
+        existing = await self.get_by_job_and_resume(db, job_id, resume_id)
+        if existing is None:
+            return await self.create(db=db, **fields)
+
+        for key, value in fields.items():
+            setattr(existing, key, value)
+
+        try:
+            await db.flush()
+            await db.refresh(existing)
+        except Exception:
+            await db.rollback()
+            raise
+
+        return existing
+    
     async def get_by_id(self, db: AsyncSession, screening_id: UUID) -> Optional[ScreeningResult]:
         """Retrieve a screening result by ID.
         

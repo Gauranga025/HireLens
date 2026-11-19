@@ -18,6 +18,7 @@ class Job(Base, UUIDMixin, TimestampMixin):
     preferred_skills: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list)
     qualifications: Mapped[List[str]] = mapped_column(JSONB, nullable=False, default=list)
     experience_required: Mapped[str] = mapped_column(String(255), nullable=False, default="Not specified")
+    structured_requirements: Mapped[List[Dict]] = mapped_column(JSONB, nullable=False, default=list)
     analysis_data: Mapped[Dict] = mapped_column(JSONB, nullable=False, default=dict)
     
     screening_results: Mapped[List["ScreeningResult"]] = relationship(
